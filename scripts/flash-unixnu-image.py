@@ -17,7 +17,7 @@ import hashlib
 import subprocess
 from pathlib import Path
 
-SERIAL = '868b7abb'
+SERIAL = 'ed5f732f'
 PART = '/dev/block/sda15'
 PART_BYTES = 34359738368
 PART_START_BYTES = 115424000 * 4096

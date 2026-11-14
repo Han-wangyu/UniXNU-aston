@@ -14,7 +14,7 @@ import hashlib
 import subprocess
 from pathlib import Path
 
-SERIAL = '868b7abb'
+SERIAL = 'ed5f732f'
 PART = '/dev/block/sde13'
 PART_BYTES = 201326592
 
@@ -46,6 +46,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--adb', required=True)
     parser.add_argument('--known', type=Path, action='append', default=[], help='a PC copy that may match the current boot_a')
+    parser.add_argument('--yes', action='store_true', help='confirm the boot_a write without interactive prompt')
     parser.add_argument('image', type=Path)
     args = parser.parse_args()
     require(args.image.stat().st_size == PART_BYTES, f'the image is not exactly {PART_BYTES} bytes')
@@ -77,7 +78,8 @@ def main():
 
     confirm = f'{SERIAL} boot_a write'
     print(f'Write {args.image.name} ({PART_BYTES} bytes, sha256 {digest}) to {PART} (boot_a).')
-    require(input(f'Type exactly: {confirm}\n> ') == confirm, 'confirmation did not match')
+    if not args.yes:
+        require(input(f'Type exactly: {confirm}\n> ') == confirm, 'confirmation did not match')
 
     remote = '/tmp/boot_a-image.img'
     adb(args, 'push', str(args.image), remote)

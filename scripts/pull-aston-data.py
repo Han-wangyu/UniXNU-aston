@@ -21,7 +21,7 @@ import shlex
 import subprocess
 from pathlib import Path
 
-SERIAL = '868b7abb'
+SERIAL = 'ed5f732f'
 PART = '/dev/block/sda15'
 PART_BYTES = 34359738368
 BLOCK = 4096
