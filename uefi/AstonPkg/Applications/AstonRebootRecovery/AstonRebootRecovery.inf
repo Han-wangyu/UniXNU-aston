@@ -1,0 +1,21 @@
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = AstonRebootRecovery
+  FILE_GUID                      = 8D5E1C2A-4F3B-4E72-A9C6-3B7F2D1E8A54
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 0.1
+  ENTRY_POINT                    = UefiMain
+
+[Sources]
+  AstonRebootRecovery.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  QcomPkg/QcomPkg.dec
+  AstonPkg/AstonPkg.dec
+
+[LibraryClasses]
+  AstonBootControlLib
+  UefiApplicationEntryPoint
+  UefiBootServicesTableLib
+  UefiLib
