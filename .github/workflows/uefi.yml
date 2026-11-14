@@ -1,0 +1,106 @@
+name: Build Aston UniXNU UEFI
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: aston-uefi-simplefb-probe
+            custom_display: "0"
+            probe_mode: "1"
+          - name: aston-uefi-displaydxe-probe
+            custom_display: "1"
+            probe_mode: "1"
+          - name: aston-uefi-simplefb-prod
+            custom_display: "0"
+            probe_mode: "0"
+          - name: aston-uefi-displaydxe-prod
+            custom_display: "1"
+            probe_mode: "0"
+    steps:
+      - name: Checkout UniXNU-aston
+        uses: actions/checkout@v4
+        with:
+          path: UniXNU-aston
+
+      - name: Clone Mu-Silicium, UniXNU (DarwinBoot), and AOSP avb
+        run: |
+          git clone https://github.com/Project-Silicium/Mu-Silicium.git Mu-Silicium
+          git -C Mu-Silicium checkout 6b3d90b79e191e08171bfedd3980234a7e49d340
+          git -C Mu-Silicium submodule update --init --recursive --depth 1
+
+          git clone --depth 1 https://github.com/UniXNU/UniXNU.git UniXNU
+          git -C UniXNU submodule update --init --depth 1 drivers/DarwinBoot
+          test -f UniXNU/drivers/DarwinBoot/DarwinBootPkg/Driver/DarwinBoot.inf
+
+          git clone --depth 1 https://android.googlesource.com/platform/external/avb avb
+          test -f avb/avbtool.py
+          test -f avb/test/data/testkey_rsa4096.pem
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pip git mono-devel build-essential lld uuid-dev nasm \
+            gcc-aarch64-linux-gnu python3 python3-git python3-pip python3-venv \
+            gettext locales gnupg ca-certificates clang llvm curl device-tree-compiler
+          python3 -m pip install -r Mu-Silicium/pip-requirements.txt --break-system-packages
+
+      - name: Setup Mu-Silicium, integrate UniXNU/AstonPkg, build and package
+        env:
+          CLANGPDB_AARCH64_PREFIX: aarch64-linux-gnu-
+          ASTON_CUSTOM_DISPLAY: ${{ matrix.custom_display }}
+          ASTON_PROBE_MODE: ${{ matrix.probe_mode }}
+        run: |
+          cd Mu-Silicium
+          python3 Platforms/OnePlus/astonPkg/DeviceBuild.py --setup -t DEBUG
+          python3 Platforms/OnePlus/astonPkg/DeviceBuild.py --update -t DEBUG
+          mkdir -p Build
+          python3 ../UniXNU-aston/uefi/apply-aston-uefi.py \
+            --mu . \
+            --unixnu ../UniXNU \
+            --aston ../UniXNU-aston
+          python3 ./build_uefi.py -d aston -r DEBUG -m 0
+          python3 ../UniXNU-aston/uefi/package-aston-boot.py \
+            --mu . \
+            --avbtool ../avb/avbtool.py \
+            --key ../avb/test/data/testkey_rsa4096.pem \
+            --name "${{ matrix.name }}" \
+            --out-dir ../out-uefi
+
+      - name: Upload ${{ matrix.name }} artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: uefi-${{ matrix.name }}
+          path: out-uefi/*
+          if-no-files-found: error
+
+  bundle:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download all UEFI variant artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: uefi-*
+          merge-multiple: true
+          path: bundle
+
+      - name: Generate combined sha256sums.txt
+        run: |
+          cd bundle
+          sha256sum *.img > sha256sums.txt
+          cat sha256sums.txt
+
+      - name: Upload bundled Aston UEFI images
+        uses: actions/upload-artifact@v4
+        with:
+          name: aston-uefi-images
+          path: bundle/*
+          if-no-files-found: error
+          compression-level: 9
