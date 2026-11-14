@@ -1,0 +1,21 @@
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = AstonSlotSwitch
+  FILE_GUID                      = 7C4F0B9E-3D2A-4B61-9E85-2F6A1C0D7B43
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 0.1
+  ENTRY_POINT                    = UefiMain
+
+[Sources]
+  AstonSlotSwitch.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  QcomPkg/QcomPkg.dec
+  AstonPkg/AstonPkg.dec
+
+[LibraryClasses]
+  AstonBootControlLib
+  UefiApplicationEntryPoint
+  UefiBootServicesTableLib
+  UefiLib
