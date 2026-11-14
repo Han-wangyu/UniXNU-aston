@@ -25,6 +25,8 @@ from pathlib import Path
 CONFIG = '::/EFI/UniXNU/unixnu.toml'
 # Ace3-UniXNU efi/AstonSlotSwitch (FILE_GUID), resolved by UniXNU from the firmware volume.
 SLOT_SWITCH = 'fv:7C4F0B9E-3D2A-4B61-9E85-2F6A1C0D7B43'
+# Ace3-UniXNU efi/AstonRebootRecovery (FILE_GUID), switches back to slot B + BCB boot-recovery.
+RECOVERY_SWITCH = 'fv:8D5E1C2A-4F3B-4E72-A9C6-3B7F2D1E8A54'
 KEEP_TYPES = ('xnu',)
 
 
@@ -70,7 +72,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('image', type=Path)
     parser.add_argument('--timeout', type=int, default=10)
-    parser.add_argument('--default', default='slot-b', choices=('slot-b', 'xnu'))
+    parser.add_argument('--default', default='slot-b')
     parser.add_argument('--variant', action='append', default=[], metavar="'ID|TITLE|EDITS'")
     args = parser.parse_args()
     env = dict(os.environ, MTOOLS_SKIP_CHECK='1', TZ='UTC')
@@ -97,6 +99,7 @@ def main():
                 vid, title, edits = spec.split('|', 2)
                 out += table('[entry]', dict(entry, id=vid, title=title, args=edit_args(entry['args'], edits))) + '\n'
     out += table('[entry]', {'id': 'slot-b', 'title': 'Switch to slot B', 'type': 'efi', 'path': SLOT_SWITCH}) + '\n'
+    out += table('[entry]', {'id': 'recovery', 'title': 'Reboot to TWRP Recovery', 'type': 'efi', 'path': RECOVERY_SWITCH}) + '\n'
     out += table('[entry]', {'id': 'shutdown', 'title': 'Power off', 'type': 'action', 'action': 'shutdown'})
     check = tomllib.loads(out)
     ids = [e['id'] for e in check['entry']]
