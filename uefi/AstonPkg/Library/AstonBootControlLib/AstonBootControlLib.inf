@@ -1,0 +1,28 @@
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = AstonBootControlLib
+  FILE_GUID                      = 3A8E4B12-7F2C-4D91-9A65-1B4D7E2C8F01
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 0.1
+  LIBRARY_CLASS                  = AstonBootControlLib|DXE_DRIVER UEFI_DRIVER UEFI_APPLICATION
+
+[Sources]
+  AstonBootControlLib.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  QcomPkg/QcomPkg.dec
+  AstonPkg/AstonPkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  MemoryAllocationLib
+  UefiBootServicesTableLib
+  UefiRuntimeServicesTableLib
+
+[Protocols]
+  gEfiBlockIoProtocolGuid
+  gEfiMemCardInfoProtocolGuid
+  gQcomPmicPonProtocolGuid
