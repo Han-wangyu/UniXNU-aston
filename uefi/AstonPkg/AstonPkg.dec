@@ -1,0 +1,14 @@
+[Defines]
+  DEC_SPECIFICATION              = 0x00010005
+  PACKAGE_NAME                   = AstonPkg
+  PACKAGE_GUID                   = 4A91E7C2-8B35-4F1D-9E62-1C5B8D4F7A90
+  PACKAGE_VERSION                = 0.1
+
+[Includes]
+  Include
+
+[Guids]
+  gAstonPkgTokenSpaceGuid        = { 0x6b3e9a1d, 0x2c4f, 0x4a50, { 0x8d, 0x74, 0x1e, 0x5f, 0x0b, 0x9c, 0x6a, 0x32 } }
+
+[PcdsFixedAtBuild]
+  gAstonPkgTokenSpaceGuid.PcdAstonProbeMode|0|UINT8|0x00000001
