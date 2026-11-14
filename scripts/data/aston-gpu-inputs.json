@@ -4,8 +4,8 @@
     "files": {
       "qcom/sm8550/aston/a740_zap.mbn": {
         "bytes": 12088,
-        "sha256": "39dad2d75b234c2664a3d8435d32debc50c933825056e6badf40eb409e8a8bbb",
-        "source": "PJE110 ColorOS 15.0.0.870(CN01) vendor_b /firmware/a740_zap.mbn (read from the erofs image dumped in TWRP, 2026-11-08); its three segments equal a740_zap.mdt + .b00-.b02 joined (they differ only in padding)"
+        "sha256": "cde26fe60661e1486fe22f3df4244b601e325d3626fb55dfde236ff5fff7c1bf",
+        "source": "PJE110 ColorOS 16.0.5.1002(CN01) vendor_b /firmware/a740_zap.mbn (read from erofs in TWRP, 2026-11-15)"
       }
     }
   }
