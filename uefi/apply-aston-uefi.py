@@ -114,6 +114,69 @@ def patch_aston_fdf(path: Path) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def patch_aston_memory_map(path: Path) -> None:
+    raw = path.read_bytes()
+    newline = "\r\n" if b"\r\n" in raw else "\n"
+    text = raw.decode("utf-8")
+    text = replace_once(
+        text,
+        newline.join(
+            [
+                '  {"HYP",               0x80000000, 0x00A00000, AddMem, SYS_MEM, SYS_MEM_CAP, Reserv, WRITE_BACK_XN},',
+                '  {"CPUSYS VM",         0x80A00000, 0x00400000, AddMem, SYS_MEM, SYS_MEM_CAP, Reserv, WRITE_BACK_XN},',
+            ]
+        ),
+        newline.join(
+            [
+                '  {"NOMAP",             0x80000000, 0x01200000, AddMem, MEM_RES, UNCACHEABLE, Reserv, UNCACHED_UNBUFFERED_XN},',
+                '  {"RSRV0",             0x81200000, 0x00800000, AddMem, SYS_MEM, SYS_MEM_CAP, Reserv, WRITE_BACK_XN},',
+            ]
+        ),
+        '{"NOMAP",             0x80000000, 0x01200000,',
+        f"{path} (HYP/CPUSYS VM -> NOMAP/RSRV0)",
+    )
+    text = replace_once(
+        text,
+        '  {"AOP",               0x81C00000, 0x000F4000, AddMem, MEM_RES, UNCACHEABLE, Reserv, UNCACHED_UNBUFFERED_XN},',
+        '  {"AOP",               0x81C00000, 0x000F5000, AddMem, MEM_RES, UNCACHEABLE, Reserv, UNCACHED_UNBUFFERED_XN},',
+        '{"AOP",               0x81C00000, 0x000F5000,',
+        f"{path} (AOP + chipinfo_region)",
+    )
+    text = replace_once(
+        text,
+        newline.join(
+            [
+                '  {"UEFI FD Reserved",  0xA7400000, 0x00200000, AddMem, SYS_MEM, SYS_MEM_CAP, BsData, WRITE_BACK},',
+                '  {"Info Blk",          0xA7601000, 0x00001000, AddMem, SYS_MEM, SYS_MEM_CAP, RtData, WRITE_BACK_XN},',
+            ]
+        ),
+        newline.join(
+            [
+                '  {"UEFI FD Reserved",  0xA7400000, 0x00200000, AddMem, SYS_MEM, SYS_MEM_CAP, BsData, WRITE_BACK},',
+                '  {"CPU Vectors",       0xA7600000, 0x00001000, AddMem, SYS_MEM, SYS_MEM_CAP, BsData, WRITE_BACK},',
+                '  {"Info Blk",          0xA7601000, 0x00001000, AddMem, SYS_MEM, SYS_MEM_CAP, RtData, WRITE_BACK_XN},',
+            ]
+        ),
+        '{"CPU Vectors",       0xA7600000, 0x00001000,',
+        f"{path} (CPU Vectors)",
+    )
+    text = replace_once(
+        text,
+        '  {"HW Fence",          0xE6440000, 0x00279000, AddMem, MEM_RES, UNCACHEABLE, Reserv, UNCACHED_UNBUFFERED_XN},',
+        '  {"HW Fence",          0xE6440000, 0x002DD000, AddMem, MEM_RES, UNCACHEABLE, Reserv, UNCACHED_UNBUFFERED_XN},',
+        '{"HW Fence",          0xE6440000, 0x002DD000,',
+        f"{path} (HW Fence)",
+    )
+    text = replace_once(
+        text,
+        '  {"LLCC LPI",          0xFF800000, 0x00600000, AddMem, MEM_RES, UNCACHEABLE, Reserv, UNCACHED_UNBUFFERED_XN},',
+        '  {"LLCC LPI",          0xFF800000, 0x00800000, AddMem, MEM_RES, UNCACHEABLE, Reserv, UNCACHED_UNBUFFERED_XN},',
+        '{"LLCC LPI",          0xFF800000, 0x00800000,',
+        f"{path} (LLCC LPI)",
+    )
+    path.write_bytes(text.encode("utf-8"))
+
+
 def patch_gic_v3(path: Path) -> None:
     raw = path.read_bytes()
     newline = "\r\n" if b"\r\n" in raw else "\n"
@@ -187,6 +250,7 @@ def main() -> None:
     patch_device_build(mu / "Platforms" / "OnePlus" / "astonPkg" / "DeviceBuild.py")
     patch_aston_dsc(mu / "Platforms" / "OnePlus" / "astonPkg" / "aston.dsc")
     patch_aston_fdf(mu / "Platforms" / "OnePlus" / "astonPkg" / "aston.fdf")
+    patch_aston_memory_map(mu / "Platforms" / "OnePlus" / "astonPkg" / "Library" / "MemoryMapLib" / "MemoryMapLib.c")
     patch_gic_v3(mu / "Mu_Basecore" / "ArmPkg" / "Drivers" / "ArmGicDxe" / "GicV3" / "ArmGicV3Dxe.c")
 
     print(
