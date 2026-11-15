@@ -82,7 +82,7 @@ def run_host_checks(args):
         args.payload,
         menu_mod.loads_menu_toml,
         required_ids=['xnu', 'install', 'slot-b', 'recovery', 'fastboot', 'shutdown'],
-        expected_default='slot-b',
+        expected_default=args.expected_default,
     )
     return {
         'manifest_version': version,
@@ -110,6 +110,7 @@ def main():
     parser.add_argument('--payload', required=True, type=Path)
     parser.add_argument('--wifi', required=True, type=Path)
     parser.add_argument('--seed', type=Path, help='optional data.dbr to double-check store start block 4456335')
+    parser.add_argument('--expected-default', default=None, help='optional expected boot.default menu ID')
     parser.add_argument('--manifest-out', type=Path, help='optional path to write staged manifest binary')
     parser.add_argument('--check-only', action='store_true', help='run host verification only and exit without touching adb')
     parser.add_argument('--yes', action='store_true', help='pass --yes to flash-unixnu-staged.py and flash-aston-boot-a.py')

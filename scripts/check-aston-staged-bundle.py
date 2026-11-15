@@ -50,30 +50,63 @@ def _load_module(filename):
     return mod
 
 
-def check_gpt_file(gpt_path):
-    data = gpt_path.read_bytes()
-    require(len(data) >= 34 * BLOCK, f'GPT dump too small: {len(data)} bytes')
-    hdr = data[BLOCK:2 * BLOCK]
-    require(hdr[:8] == b'EFI PART', f'missing EFI PART signature in {gpt_path}')
+def _verify_gpt_header(hdr):
+    require(hdr[:8] == b'EFI PART', 'missing EFI PART signature')
     rev, hdr_size, hdr_crc, reserved = struct.unpack_from('<IIII', hdr, 8)
     require(rev == 0x00010000 and 92 <= hdr_size <= BLOCK and reserved == 0, 'invalid GPT header revision/size')
     zeroed = hdr[:16] + b'\x00\x00\x00\x00' + hdr[20:hdr_size]
     require((zlib.crc32(zeroed) & 0xFFFFFFFF) == hdr_crc, 'GPT header CRC32 mismatch')
-
     my_lba, backup_lba, first_lba, last_lba = struct.unpack_from('<QQQQ', hdr, 24)
     entries_lba, count, entry_size, entries_crc = struct.unpack_from('<QIII', hdr, 72)
-    require(my_lba == 1 and entry_size == 128 and 1 <= count <= 128, 'unexpected GPT geometry')
-    require(backup_lba <= 0xFFFFFFFF and first_lba <= last_lba < backup_lba, 'GPT exceeds READ(10) LBA bounds')
+    require(entry_size == 128 and 1 <= count <= 128, 'unexpected GPT geometry')
+    return {
+        'my_lba': my_lba,
+        'backup_lba': backup_lba,
+        'first_lba': first_lba,
+        'last_lba': last_lba,
+        'entries_lba': entries_lba,
+        'count': count,
+        'entry_size': entry_size,
+        'entries_crc': entries_crc,
+    }
 
-    ent_off = entries_lba * BLOCK
-    ent_bytes = count * entry_size
-    require(len(data) >= ent_off + ent_bytes, 'GPT dump truncated before end of entries')
-    ent_blob = data[ent_off:ent_off + ent_bytes]
-    require((zlib.crc32(ent_blob) & 0xFFFFFFFF) == entries_crc, 'GPT entries CRC32 mismatch')
+
+def check_gpt_file(gpt_path):
+    data = gpt_path.read_bytes()
+    if len(data) >= 34 * BLOCK and data[BLOCK:BLOCK + 8] == b'EFI PART':
+        gpt_format = 'raw-lun0'
+        primary = _verify_gpt_header(data[BLOCK:2 * BLOCK])
+        require(primary['my_lba'] == 1, 'unexpected raw LUN0 primary LBA')
+        require(primary['backup_lba'] <= 0xFFFFFFFF and primary['first_lba'] <= primary['last_lba'] < primary['backup_lba'],
+                'GPT exceeds READ(10) LBA bounds')
+        ent_off = primary['entries_lba'] * BLOCK
+        ent_bytes = primary['count'] * primary['entry_size']
+        require(len(data) >= ent_off + ent_bytes, 'GPT dump truncated before end of entries')
+        ent_blob = data[ent_off:ent_off + ent_bytes]
+    elif len(data) >= 1536 and data[512:520] == b'EFI PART' and data[1024:1032] == b'EFI PART':
+        gpt_format = 'sgdisk-backup'
+        primary = _verify_gpt_header(data[512:1024])
+        secondary = _verify_gpt_header(data[1024:1536])
+        require(primary['my_lba'] == 1 and secondary['my_lba'] == primary['backup_lba'] and secondary['backup_lba'] == 1,
+                'sgdisk backup primary/secondary LBA mismatch')
+        require(primary['backup_lba'] <= 0xFFFFFFFF and primary['first_lba'] <= primary['last_lba'] < primary['backup_lba'],
+                'GPT exceeds READ(10) LBA bounds')
+        require((primary['first_lba'], primary['last_lba'], primary['count'], primary['entries_crc'])
+                == (secondary['first_lba'], secondary['last_lba'], secondary['count'], secondary['entries_crc']),
+                'sgdisk primary/secondary GPT metadata mismatch')
+        ent_bytes = primary['count'] * primary['entry_size']
+        require(len(data) >= 1536 + ent_bytes, 'sgdisk backup truncated before end of entries')
+        ent_blob = data[1536:1536 + ent_bytes]
+    else:
+        raise SystemExit(f'FAIL: unrecognized GPT format/size in {gpt_path} ({len(data)} bytes)')
+
+    require((zlib.crc32(ent_blob) & 0xFFFFFFFF) == primary['entries_crc'], 'GPT entries CRC32 mismatch')
 
     parts = {}
     used_ranges = []
-    for idx in range(count):
+    first_lba = primary['first_lba']
+    last_lba = primary['last_lba']
+    for idx in range(primary['count']):
         e = ent_blob[idx * 128:(idx + 1) * 128]
         if e[:16] == b'\x00' * 16:
             continue
@@ -89,21 +122,23 @@ def check_gpt_file(gpt_path):
     u_first, u_last = parts['unixnu'][0]
     u_blocks = u_last - u_first + 1
     require(u_blocks == PART_BLOCKS, f'unixnu has {u_blocks} blocks, expected {PART_BLOCKS}')
-    return {'unixnu_first_lba': u_first, 'unixnu_last_lba': u_last, 'unixnu_blocks': u_blocks}
+    return {'format': gpt_format, 'unixnu_first_lba': u_first, 'unixnu_last_lba': u_last, 'unixnu_blocks': u_blocks}
 
 
-def check_payload_image(img_path, loads_toml, required_ids=None, expected_default='slot-b'):
+def check_payload_image(img_path, loads_toml, required_ids=None, expected_default=None):
     env = dict(os.environ, MTOOLS_SKIP_CHECK='1', TZ='UTC')
     raw = subprocess.run(['mtype', '-i', str(img_path), '::/EFI/UniXNU/unixnu.toml'],
                          env=env, check=True, capture_output=True).stdout.decode('utf-8')
     cfg = loads_toml(raw)
     boot = cfg.get('boot', {})
-    if expected_default:
-        require(boot.get('default') == expected_default,
-                f'{img_path.name}: boot.default={boot.get("default")!r}, want {expected_default!r}')
     entries = cfg.get('entry', [])
     ids = [e.get('id') for e in entries]
     require(len(ids) == len(set(ids)), f'{img_path.name}: duplicate menu IDs in {ids}')
+    require(boot.get('default') in ids, f'{img_path.name}: boot.default={boot.get("default")!r} missing from {ids}')
+    require('slot-b' in ids, f'{img_path.name}: missing Android safety fallback entry slot-b in {ids}')
+    if expected_default is not None:
+        require(boot.get('default') == expected_default,
+                f'{img_path.name}: boot.default={boot.get("default")!r}, want {expected_default!r}')
     if required_ids:
         for req in required_ids:
             require(req in ids, f'{img_path.name}: missing required entry {req!r} in {ids}')
@@ -211,7 +246,7 @@ def main():
                         help='verify source file matches named SHNGROOT entry')
     parser.add_argument('--payload', action='append', default=[], type=Path, help='payload FAT32 image(s) to verify')
     parser.add_argument('--require-entry', action='append', default=[], help='required menu entry ID(s)')
-    parser.add_argument('--expected-default', default='slot-b', help='expected default menu ID (default: slot-b)')
+    parser.add_argument('--expected-default', default=None, help='optional expected default menu ID')
     parser.add_argument('--seed', type=Path, help='path to data.dbr DBRDISK1 seed')
     parser.add_argument('--boot-a', type=Path, help='path to boot_a-*-avb.img')
     parser.add_argument('--uefi-dir', type=Path, help='UEFI artifacts directory containing sha256sums.txt')
