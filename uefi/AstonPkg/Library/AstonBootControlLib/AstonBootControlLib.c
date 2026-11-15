@@ -11,6 +11,7 @@
 #include <Library/BaseMemoryLib.h>
 #include <Library/DebugLib.h>
 #include <Library/MemoryAllocationLib.h>
+#include <Library/ResetSystemLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiRuntimeServicesTableLib.h>
 #include <Library/AstonBootControlLib.h>
@@ -937,6 +938,7 @@ AstonRebootWithReason (
     SetPonBootSpare (0x00);
   }
 
-  gRT->ResetSystem (EfiResetWarm, EFI_SUCCESS, ResetSize, (VOID *)ResetStr);
   gRT->ResetSystem (EfiResetCold, EFI_SUCCESS, ResetSize, (VOID *)ResetStr);
+  gRT->ResetSystem (EfiResetWarm, EFI_SUCCESS, ResetSize, (VOID *)ResetStr);
+  ResetCold ();
 }

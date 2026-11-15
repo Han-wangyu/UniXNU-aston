@@ -19,6 +19,7 @@
   BaseMemoryLib
   DebugLib
   MemoryAllocationLib
+  ResetSystemLib
   UefiBootServicesTableLib
   UefiRuntimeServicesTableLib
 
