@@ -20,7 +20,7 @@ import plistlib
 from pathlib import Path
 
 PLUGIN = 'System/Library/SystemConfiguration/InterfaceNamer.bundle/Info.plist'
-TIMEOUTS = {'WaitStackTimeout': 5.0, 'WaitQuietTimeout': 10.0}
+TIMEOUTS = {'WaitStackTimeout': 1.0, 'WaitQuietTimeout': 2.0}
 
 
 def main():

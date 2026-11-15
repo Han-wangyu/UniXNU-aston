@@ -12,15 +12,18 @@ Usage:
     --window OS=/path/to/OS.dmg --window SystemOS=/path/to/SystemOS.dmg \\
     --object OS.vroot=/path/to/OS.vroot --object SystemOS.vroot=/path/to/SystemOS.vroot \\
     --object Payload=/path/to/payload.img --object Wifi=/path/to/wifi.obj \\
-    [--adb /path/to/adb] [--serial ed5f732f] [--update-payload-only] [--init-store-and-log] [--yes]
+    [--adb /path/to/adb] [--serial ed5f732f] [--update-payload-only] [--init-store-and-log] \\
+    [--seed-dbr /path/to/scratch-data.img | --seed-from-payload /path/to/payload.img] [--init-store-only] [--yes]
 """
 import argparse
 import hashlib
 import json
 import os
+import shutil
 import struct
 import subprocess
 import tempfile
+import zlib
 from pathlib import Path
 
 MIB = 1 << 20
@@ -32,10 +35,12 @@ DEFAULT_SERIAL = 'ed5f732f'
 PART = '/dev/block/sda15'
 USERDATA_PART = '/dev/block/sda14'
 PART_BYTES = 34359738368              # 8388608 * 4096
+PART_BLOCKS = PART_BYTES // 4096      # 8388608
 PART_START_BYTES = 115424000 * 4096
+STORE_RESERVE_BLOCKS = 1024 * 256     # NativeUfs.cpp kDefaultReserveMiB (1024 MiB)
 STORE_START_BLOCK = 4456335           # SHNGDATA store header at block 4456335
 STORE_START_BYTES = STORE_START_BLOCK * 4096
-STORE_INIT_ZERO_BLOCKS = 512          # 2 MiB header+bitmap clear -> native_data_persist_state == 3 cleanly
+STORE_INIT_ZERO_BLOCKS = 512          # 2 MiB header+bitmap clear
 PROBE_REPORT_BLOCK = 4194304          # Non-destructive UEFI probe report LBA (16 GiB offset)
 EXPORT_START_BLOCK = 8314880          # ShengUfs panic/diag export ring start (65536 blocks)
 BOOTLOG_START_BLOCK = 8380416         # ShengUfs boot log ring start (8192 blocks)
@@ -47,10 +52,111 @@ HEADER_STRUCT = struct.Struct('<8sIIQ')
 ENTRY_STRUCT = struct.Struct('<32sQQII32s40s')
 MAX_ENTRIES = 31
 
+SHNGDATA_MAGIC = b'SHNGDATA'
+SHNGDATA_HEADER_BYTES = 64
+DBRDISK_MAGIC = b'DBRDISK1'
+PAYLOAD_DBR_MEMBER = '::/EFI/UniXNU/Payloads/scratch-data.img'
+
 
 def require(ok, why):
     if not ok:
         raise SystemExit(f'STOP: {why}; nothing written')
+
+
+def extract_dbr_from_payload(payload_path):
+    payload_path = Path(payload_path).expanduser().resolve()
+    require(payload_path.is_file(), f'missing payload image: {payload_path}')
+    mtype_bin = shutil.which('mtype') or '/opt/homebrew/bin/mtype'
+    env = dict(os.environ, MTOOLS_SKIP_CHECK='1', TZ='UTC')
+    return subprocess.run(
+        [mtype_bin, '-i', str(payload_path), PAYLOAD_DBR_MEMBER],
+        env=env, check=True, capture_output=True,
+    ).stdout
+
+
+def build_shngdata_header_from_dbr(dbr_bytes):
+    """Computes the exact SeedDisk.h + PersistOverlay.h 4096-byte SHNGDATA v1 header block."""
+    require(len(dbr_bytes) >= 32 and len(dbr_bytes) <= 0x10000000, f'unexpected DBRDISK1 length: {len(dbr_bytes)}')
+    magic, version, block_size = struct.unpack_from('<8sII', dbr_bytes, 0)
+    size, count = struct.unpack_from('<QQ', dbr_bytes, 16)
+    require(magic == DBRDISK_MAGIC and version == 1 and block_size == 4096,
+            f'invalid DBRDISK1 header: magic={magic!r} version={version} block_size={block_size}')
+    require(0 < size <= (1 << 40) and (size & 4095) == 0, f'invalid logical disk size: {size}')
+    require(count <= 65536 and count <= (len(dbr_bytes) - 32) // 16, f'invalid extent count: {count}')
+
+    extents = []
+    end = 0
+    cursor = 32 + count * 16
+    for idx in range(count):
+        at, length = struct.unpack_from('<QQ', dbr_bytes, 32 + idx * 16)
+        require(length > 0 and ((at | length) & 4095) == 0 and at >= end and at <= size
+                and length <= size - at and length <= len(dbr_bytes) - cursor,
+                f'invalid DBRDISK1 extent {idx}: at={at} len={length}')
+        extents.append((at, length, cursor))
+        end = at + length
+        cursor += length
+    require(cursor == len(dbr_bytes), f'trailing/short DBRDISK1 bytes: cursor={cursor} len={len(dbr_bytes)}')
+
+    pages = size // 4096
+    bitmap_blocks = (pages + 8 * 4096 - 1) // (8 * 4096)
+    window_blocks = 1 + bitmap_blocks + pages
+    computed_store_start = PART_BLOCKS - STORE_RESERVE_BLOCKS - window_blocks
+    require(computed_store_start == STORE_START_BLOCK,
+            f'computed SHNGDATA start block {computed_store_start} != expected {STORE_START_BLOCK}')
+    require(bitmap_blocks <= STORE_INIT_ZERO_BLOCKS - 1,
+            f'bitmap_blocks={bitmap_blocks} exceeds init clear guard {STORE_INIT_ZERO_BLOCKS - 1}')
+
+    nonzero_pages = 0
+    digest = hashlib.sha256()
+    if size <= 0x80000000:
+        zero_page = b'\x00' * 4096
+        next_idx = 0
+        for at, length, ext_cursor in extents:
+            for rel in range(0, length, 4096):
+                page = dbr_bytes[ext_cursor + rel : ext_cursor + rel + 4096]
+                if not any(page):
+                    continue
+                idx = (at + rel) // 4096
+                while next_idx < idx:
+                    digest.update(zero_page)
+                    next_idx += 1
+                digest.update(page)
+                next_idx = idx + 1
+                nonzero_pages += 1
+        while next_idx < pages:
+            digest.update(zero_page)
+            next_idx += 1
+    else:
+        digest.update(b'SHNGSEED2' + struct.pack('<Q', size))
+        for at, length, ext_cursor in extents:
+            for rel in range(0, length, 4096):
+                page = dbr_bytes[ext_cursor + rel : ext_cursor + rel + 4096]
+                if any(page):
+                    idx = (at + rel) // 4096
+                    digest.update(struct.pack('<Q', idx))
+                    digest.update(page)
+                    nonzero_pages += 1
+
+    seed_hash = digest.digest()
+    hdr = bytearray(4096)
+    hdr[0:8] = SHNGDATA_MAGIC
+    struct.pack_into('<IIQ', hdr, 8, 1, SHNGDATA_HEADER_BYTES, pages)
+    hdr[24:56] = seed_hash
+    struct.pack_into('<I', hdr, 56, 1)
+    crc = zlib.crc32(bytes(hdr[:60])) & 0xFFFFFFFF
+    struct.pack_into('<I', hdr, 60, crc)
+    header_bytes = bytes(hdr)
+    return header_bytes, {
+        'logical_bytes': size,
+        'pages': pages,
+        'bitmap_blocks': bitmap_blocks,
+        'window_blocks': window_blocks,
+        'store_start_block': computed_store_start,
+        'nonzero_pages': nonzero_pages,
+        'seed_sha256': seed_hash.hex(),
+        'crc32': f'0x{crc:08x}',
+        'header_sha256': hashlib.sha256(header_bytes).hexdigest(),
+    }
 
 
 def parse_kv(spec):
@@ -207,6 +313,30 @@ class AdbPhone:
         require(after == expected_sha, f'zero verify failed on {label}: got {after}, want {expected_sha}')
         print(f'zeroed    {label} ({count_blocks}x4K @ {start_block}, sha256 {after[:12]})', flush=True)
 
+    def write_4k_block_checked(self, block_index, blob, label):
+        require(len(blob) == 4096, f'{label}: expected 4096 bytes, got {len(blob)}')
+        require(block_index >= 256 and block_index < PART_BLOCKS, f'refusing out-of-range block write on {label}: {block_index}')
+        expected_sha = hashlib.sha256(blob).hexdigest()
+        cmd_hash = f'dd if={PART} bs=4096 skip={block_index} count=1 2>/dev/null | sha256sum'
+        if self.shell(cmd_hash).split()[0] == expected_sha:
+            print(f'unchanged {label} (4K @ {block_index}, sha256 {expected_sha[:12]})', flush=True)
+            return
+        remote = '/tmp/unixnu-4k.bin'
+        with tempfile.TemporaryDirectory(prefix='unixnu-4k-') as tmp:
+            local = Path(tmp) / 'block.bin'
+            local.write_bytes(blob)
+            self.run('push', str(local), remote)
+        try:
+            remote_sha = self.shell(f'sha256sum {remote}').split()[0]
+            require(remote_sha == expected_sha, f'push corruption on {label}: got {remote_sha}, want {expected_sha}')
+            self.shell(f'dd if={remote} of={PART} bs=4096 seek={block_index} count=1 conv=notrunc,fsync 2>&1')
+        finally:
+            self.shell(f'rm -f {remote}')
+        self.shell('sync; echo 3 > /proc/sys/vm/drop_caches')
+        after = self.shell(cmd_hash).split()[0]
+        require(after == expected_sha, f'readback verify failed on {label}: got {after}, want {expected_sha}')
+        print(f'written   {label} (4K @ {block_index}, sha256 {after[:12]})', flush=True)
+
 
 def stream_entry_chunks(phone, entry, tmpdir):
     piece_path = tmpdir / 'piece.bin'
@@ -269,13 +399,72 @@ def main():
     parser.add_argument('--object', action='append', default=[], metavar='NAME=FILE')
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--manifest-out', type=Path)
+    parser.add_argument('--shngdata-out', type=Path, help='optional path to write 4096-byte SHNGDATA v1 header')
+    parser.add_argument('--seed-dbr', type=Path, help='DBRDISK1 seed (Payloads/scratch-data.img) to initialize SHNGDATA header')
+    parser.add_argument('--seed-from-payload', type=Path, help='payload FAT32 image containing ::/EFI/UniXNU/Payloads/scratch-data.img')
     parser.add_argument('--update-payload-only', action='store_true')
     parser.add_argument('--init-store-and-log', action='store_true',
-                        help='zero SHNGDATA header+bitmap and ShengUfs log/export headers before writing SHNGROOT')
+                        help='zero SHNGDATA store/bitmap + ShengUfs log/export headers (and write SHNGDATA v1 header if --seed-* is given)')
+    parser.add_argument('--init-store-only', action='store_true',
+                        help='only zero SHNGDATA bitmap and write SHNGDATA v1 header onto an existing SHNGROOT unixnu partition')
     parser.add_argument('--yes', action='store_true')
     args = parser.parse_args()
+    require(not (args.seed_dbr and args.seed_from_payload), '--seed-dbr cannot be combined with --seed-from-payload')
     require(not (args.init_store_and_log and args.update_payload_only),
             '--init-store-and-log cannot be combined with --update-payload-only')
+    require(not (args.init_store_only and (args.init_store_and_log or args.update_payload_only)),
+            '--init-store-only cannot be combined with --init-store-and-log or --update-payload-only')
+
+    shngdata_hdr = None
+    shngdata_info = None
+    if args.seed_dbr or args.seed_from_payload:
+        if args.seed_dbr:
+            seed_path = args.seed_dbr.expanduser().resolve()
+            require(seed_path.is_file(), f'missing seed DBRDISK1 file: {seed_path}')
+            dbr_bytes = seed_path.read_bytes()
+        else:
+            dbr_bytes = extract_dbr_from_payload(args.seed_from_payload)
+        shngdata_hdr, shngdata_info = build_shngdata_header_from_dbr(dbr_bytes)
+        if args.shngdata_out:
+            out_path = args.shngdata_out.expanduser().resolve()
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_bytes(shngdata_hdr)
+
+    if args.init_store_only:
+        require(shngdata_hdr is not None, '--init-store-only requires --seed-dbr or --seed-from-payload')
+        require(not args.window and not args.object, '--init-store-only does not accept --window or --object')
+        summary = {
+            'part': PART,
+            'serial': args.serial,
+            'mode': 'init-store-only',
+            'store_start_block': STORE_START_BLOCK,
+            'store_start_bytes': STORE_START_BYTES,
+            'shngdata': shngdata_info,
+        }
+        print(json.dumps(summary, indent=2))
+        if args.dry_run:
+            return
+        phone = AdbPhone(args.adb, args.serial)
+        phone.verify_twrp_target()
+        raw_root = phone.run('exec-out', f'dd if={PART} bs=4096 count=1 2>/dev/null', binary=True)
+        cur_ver, cur_total, cur_entries = parse_header(raw_root)
+        require(cur_total <= STORE_START_BYTES, f'on-device SHNGROOT total {cur_total} overlaps store {STORE_START_BYTES}')
+        require(cur_ver == 2 and any(e['name'] == 'Payload' for e in cur_entries),
+                'on-device SHNGROOT v2 has no Payload entry')
+        confirm = f'{args.serial} unixnu init-store-only'
+        if not args.yes:
+            require(input(f'Type exactly: {confirm}\n> ') == confirm, 'confirmation did not match')
+        bm_blocks = shngdata_info['bitmap_blocks']
+        phone.zero_4k_region_checked(STORE_START_BLOCK + 1, bm_blocks, 'SHNGDATA-bitmap')
+        phone.write_4k_block_checked(STORE_START_BLOCK, shngdata_hdr, 'SHNGDATA-header')
+        expected_combined_sha = hashlib.sha256(shngdata_hdr + b'\x00' * (bm_blocks * 4096)).hexdigest()
+        combined_sha = phone.shell(
+            f'dd if={PART} bs=4096 skip={STORE_START_BLOCK} count={1 + bm_blocks} 2>/dev/null | sha256sum'
+        ).split()[0]
+        require(combined_sha == expected_combined_sha,
+                f'SHNGDATA header+bitmap readback mismatch: got {combined_sha}, want {expected_combined_sha}')
+        print(f'DONE: initialized SHNGDATA v1 store ({shngdata_info["pages"]} pages @ block {STORE_START_BLOCK}) on {PART}')
+        return
 
     entries, total, version, manifest_mib = build_layout(args.window, args.object)
     summary = {
@@ -287,6 +476,7 @@ def main():
         'store_start_bytes': STORE_START_BYTES,
         'store_start_block': STORE_START_BLOCK,
         'init_store_and_log': args.init_store_and_log,
+        'shngdata': shngdata_info,
         'probe_report_block': PROBE_REPORT_BLOCK,
         'export_start_block': EXPORT_START_BLOCK,
         'bootlog_start_block': BOOTLOG_START_BLOCK,
@@ -336,8 +526,10 @@ def main():
             written_padded[entry['name']] = entry_padded_sha
 
         if args.init_store_and_log:
-            print('==> Zeroing SHNGDATA store head and ShengUfs log/export headers', flush=True)
+            print('==> Initializing SHNGDATA store head and ShengUfs log/export headers', flush=True)
             phone.zero_4k_region_checked(STORE_START_BLOCK, STORE_INIT_ZERO_BLOCKS, 'SHNGDATA-head')
+            if shngdata_hdr is not None:
+                phone.write_4k_block_checked(STORE_START_BLOCK, shngdata_hdr, 'SHNGDATA-header')
             phone.zero_4k_region_checked(EXPORT_START_BLOCK, 16, 'ShengUfs-export-head')
             phone.zero_4k_region_checked(BOOTLOG_START_BLOCK, 256, 'ShengUfs-bootlog-head')
 

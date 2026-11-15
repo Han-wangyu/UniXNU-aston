@@ -52,8 +52,9 @@ def main():
     spec.loader.exec_module(stage)
     board = tomllib.loads((ROOT / 'board.toml').read_text())
     assert 'armcpu-edge=1' in board['payload']['kernel_args']
-    assert 'sheng-cpufreq-boost-ms=80' in board['payload']['kernel_args']
-    assert 'sheng-cpufreq-frame-ms=0' in board['payload']['kernel_args']
+    assert 'appsync=1' in board['payload']['kernel_args']
+    assert 'sheng-cpufreq=4' in board['payload']['kernel_args']
+    assert 'sheng-cpufreq-frame-ms=0' not in board['payload']['kernel_args']
     archives = board['kernel']['archives']
     assert archives.index('prepare-aston-ramblock.py') < min(archives.index('component:ShengUfs'), archives.index('component:RamBlock'))
     before = (args.ramblock / 'NativeRamBlock.cpp').read_bytes()

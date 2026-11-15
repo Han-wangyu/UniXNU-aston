@@ -17,6 +17,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
 import struct
 import subprocess
 import zlib
@@ -126,8 +127,9 @@ def check_gpt_file(gpt_path):
 
 
 def check_payload_image(img_path, loads_toml, required_ids=None, expected_default=None):
+    mtype_bin = shutil.which('mtype') or '/opt/homebrew/bin/mtype'
     env = dict(os.environ, MTOOLS_SKIP_CHECK='1', TZ='UTC')
-    raw = subprocess.run(['mtype', '-i', str(img_path), '::/EFI/UniXNU/unixnu.toml'],
+    raw = subprocess.run([mtype_bin, '-i', str(img_path), '::/EFI/UniXNU/unixnu.toml'],
                          env=env, check=True, capture_output=True).stdout.decode('utf-8')
     cfg = loads_toml(raw)
     boot = cfg.get('boot', {})

@@ -145,12 +145,28 @@ def run_host_checks(args):
         args.manifest_out.write_bytes(manifest_mib)
 
     seed_info = checker.check_seed_geometry(args.seed) if args.seed else None
+    shngdata_hdr = None
+    shngdata_info = None
+    if args.seed:
+        shngdata_hdr, shngdata_info = staged.build_shngdata_header_from_dbr(args.seed.read_bytes())
+    else:
+        try:
+            dbr_bytes = staged.extract_dbr_from_payload(args.payload)
+            shngdata_hdr, shngdata_info = staged.build_shngdata_header_from_dbr(dbr_bytes)
+        except Exception:
+            shngdata_hdr = None
+            shngdata_info = None
     boot_a_info = checker.check_boot_a(args.boot_a)
     payload_info = checker.check_payload_image(
         args.payload,
         menu_mod.loads_menu_toml,
         required_ids=['xnu', 'install', 'slot-b', 'recovery', 'fastboot', 'shutdown'],
         expected_default=args.expected_default,
+    )
+    expected_store_head = (
+        hashlib.sha256(shngdata_hdr + b'\x00' * (511 * 4096)).hexdigest()
+        if shngdata_hdr is not None
+        else hashlib.sha256(b'\x00' * (512 * 4096)).hexdigest()
     )
     return {
         'manifest_version': version,
@@ -159,6 +175,8 @@ def run_host_checks(args):
         'manifest_mib_sha256': hashlib.sha256(manifest_mib).hexdigest(),
         'entries': [e['name'] for e in entries],
         'seed': seed_info,
+        'shngdata': shngdata_info,
+        'expected_store_head_sha256': expected_store_head,
         'boot_a': boot_a_info,
         'payload': payload_info,
     }
@@ -221,6 +239,10 @@ def main():
         '--object', f'Wifi={args.wifi}',
         '--init-store-and-log',
     ]
+    if args.seed:
+        stage_cmd.extend(['--seed-dbr', str(args.seed)])
+    elif summary.get('shngdata') is not None:
+        stage_cmd.extend(['--seed-from-payload', str(args.payload)])
     if args.manifest_out:
         stage_cmd.extend(['--manifest-out', str(args.manifest_out)])
     if args.yes:
@@ -248,8 +270,8 @@ def main():
         adb_bin, args.serial, 'shell',
         f'dd if={PART_UNIXNU} bs=4096 skip={STORE_START_BLOCK} count=512 2>/dev/null | sha256sum',
     ).split()[0]
-    expected_zero_sha = hashlib.sha256(b'\x00' * (512 * 4096)).hexdigest()
-    require(store_head_sha == expected_zero_sha, 'SHNGDATA header/bitmap head not zeroed cleanly')
+    require(store_head_sha == summary['expected_store_head_sha256'],
+            f'SHNGDATA header/bitmap head mismatch: got {store_head_sha}, want {summary["expected_store_head_sha256"]}')
 
     print('DONE: sda15 unixnu staged + sde13 boot_a flashed and verified; ColorOS 16 Slot B untouched')
     if args.switch_to_slot_a:

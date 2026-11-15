@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Execute the production scratch-Data policy initializer with syscall stand-ins."""
-import hashlib,json,subprocess
+import hashlib,json,subprocess,tempfile
 from pathlib import Path
-root=Path(__file__).resolve().parents[1];out=root/'build/cpu-desktop/watchdog-policy';out.mkdir(parents=True,exist_ok=True)
+root=Path(__file__).resolve().parents[1]
 s=(root/'package/BootWatchdogPolicy.c').read_text();body=s[s.index('static const char policy'):]
 prefix=r'''
 #include <assert.h>
@@ -32,8 +32,8 @@ struct fchown_args {int fd,uid,gid;};struct fchmod_args {int fd,mode;};
 struct unlink_args {user_addr_t path;};struct fsync_args {int fd;};struct fstat64_args {int fd;user_addr_t ub;};struct close_args {int fd;};
 static char jobs[200];static int enabled,calls,opens,closes,md_error,open_error,short_write,chown_error,bad_owner,close_error,marker_exists;
 static unsigned char written_data[3072];static size_t written_size;
-static int setup_arg,reset_arg,lite_arg,unlink_error,unlinks;static char unlinked[2][128];
-static int PE_parse_boot_argn(const char *key,void *out,int n){if(!strcmp(key,"sheng-lite")){assert(n==4);memcpy(out,&lite_arg,4);return lite_arg!=0;}if(!strcmp(key,"sheng-setup")){assert(n==4);memcpy(out,&setup_arg,4);return setup_arg!=0;}if(!strcmp(key,"sheng-data-reset")){assert(n==4);memcpy(out,&reset_arg,4);return reset_arg!=0;}if(!strcmp(key,"sheng-disable-jobs")){assert(n==200);memcpy(out,jobs,200);return jobs[0]!=0;}assert(!strcmp(key,"sheng-disable-watchdogd")&&n==4);memcpy(out,&enabled,4);return enabled!=0;}
+static int setup_arg,data_reset_arg,reset_arg,lite_arg,unlink_error,unlinks;static char unlinked[2][128];
+static int PE_parse_boot_argn(const char *key,void *out,int n){if(!strcmp(key,"sheng-lite")){assert(n==4);memcpy(out,&lite_arg,4);return lite_arg!=0;}if(!strcmp(key,"sheng-setup")){assert(n==4);memcpy(out,&setup_arg,4);return setup_arg!=0;}if(!strcmp(key,"data-reset")){assert(n==4);memcpy(out,&data_reset_arg,4);return data_reset_arg!=0;}if(!strcmp(key,"sheng-data-reset")){assert(n==4);memcpy(out,&reset_arg,4);return reset_arg!=0;}if(!strcmp(key,"sheng-disable-jobs")){assert(n==200);memcpy(out,jobs,200);return jobs[0]!=0;}assert(!strcmp(key,"sheng-disable-watchdogd")&&n==4);memcpy(out,&enabled,4);return enabled!=0;}
 static int copyout(const void *s,uintptr_t d,size_t n){++calls;memcpy((void *)d,s,n);return 0;}
 static int copyin(uintptr_t s,void *d,size_t n){++calls;memcpy(d,(void *)s,n);return 0;}
 static int k_unlink(proc_t p,struct unlink_args *a,int32_t *r){(void)p;(void)r;++calls;assert(unlinks<2);strcpy(unlinked[unlinks++],(char*)a->path);return unlink_error;}
@@ -48,7 +48,7 @@ static int sys_close(proc_t p,struct close_args *a,int32_t *r){(void)p;(void)r;+
 '''
 main=r'''
 static unsigned char scratch[4096];
-static void reset(void){enabled=1;jobs[0]=0;calls=opens=closes=md_error=open_error=short_write=chown_error=bad_owner=close_error=marker_exists=0;written_size=0;setup_arg=reset_arg=lite_arg=unlink_error=unlinks=0;}
+static void reset(void){enabled=1;jobs[0]=0;calls=opens=closes=md_error=open_error=short_write=chown_error=bad_owner=close_error=marker_exists=0;written_size=0;setup_arg=data_reset_arg=reset_arg=lite_arg=unlink_error=unlinks=0;}
 static int run(void){return sheng_boot_watchdog_policy(NULL,(uintptr_t)scratch);}
 int main(void){
  reset();enabled=0;assert(!run()&&!calls);
@@ -86,11 +86,14 @@ int main(void){
  reset();setup_arg=0;assert(!run()&&!unlinks);setup_arg=2;enabled=0;assert(!run()&&!unlinks);
  reset();enabled=0;reset_arg=2;assert(!run()&&unlinks==2);   /* erase Data and show Hello */
  reset();enabled=0;reset_arg=1;assert(!run()&&!unlinks);   /* erase Data, Setup stays skipped */
+ reset();enabled=0;data_reset_arg=2;assert(!run()&&unlinks==2);
+ reset();enabled=0;data_reset_arg=1;assert(!run()&&!unlinks);
  return 0;
 }
 '''
-(out/'test.c').write_text(prefix+body+main)
-subprocess.run(['clang','-std=c11','-Wall','-Wextra','-Werror','-O1','-g','-fsanitize=address,undefined',str(out/'test.c'),'-o',str(out/'test')],check=True,timeout=45)
-subprocess.run([str(out/'test')],check=True,timeout=10)
-(out/'report.json').write_text(json.dumps(dict(passed=True,source_body_sha256=hashlib.sha256(body.encode()).hexdigest(),syscalls_substituted=True,hardware_policy_accepted=False),indent=2)+'\n')
+with tempfile.TemporaryDirectory(prefix='watchdog-policy-') as td:
+    out=Path(td)
+    (out/'test.c').write_text(prefix+body+main)
+    subprocess.run(['clang','-std=c11','-Wall','-Wextra','-Werror','-O1','-g','-fsanitize=address,undefined',str(out/'test.c'),'-o',str(out/'test')],check=True,timeout=45)
+    subprocess.run([str(out/'test')],check=True,timeout=10)
 print('PASS: production policy initializer; opt-in gate, exact content, ownership/mode checks, no overwrite, partial-write/close failures, marker and cleanup')

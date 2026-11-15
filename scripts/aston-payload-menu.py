@@ -17,6 +17,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -187,18 +188,24 @@ def main():
     parser.add_argument('image', type=Path)
     parser.add_argument('--timeout', type=int, default=10)
     parser.add_argument('--default', default='slot-b')
+    parser.add_argument('--base-edits', default='', metavar='EDITS',
+                        help='apply EDITS to base xnu entries before generating --variant entries')
     parser.add_argument('--variant', action='append', default=[], metavar="'ID|TITLE|EDITS'")
     parser.add_argument('--drop-variants', action='store_true',
                         help='keep only xnu and install from existing xnu entries before applying --variant')
     args = parser.parse_args()
+    mtype_bin = shutil.which('mtype') or '/opt/homebrew/bin/mtype'
+    mcopy_bin = shutil.which('mcopy') or '/opt/homebrew/bin/mcopy'
     env = dict(os.environ, MTOOLS_SKIP_CHECK='1', TZ='UTC')
-    text = subprocess.run(['mtype', '-i', str(args.image), CONFIG], env=env, check=True, capture_output=True).stdout
+    text = subprocess.run([mtype_bin, '-i', str(args.image), CONFIG], env=env, check=True, capture_output=True).stdout
     generated = loads_menu_toml(text.decode())
     entries = [e for e in generated.get('entry', []) if e.get('type') in KEEP_TYPES]
     if args.drop_variants:
         entries = [e for e in entries if e.get('id') in ('xnu', 'install')]
     if not entries or not any(e.get('id') == 'xnu' for e in entries):
         raise SystemExit('the generated menu has no xnu entry: not a `unixnu build payload` volume')
+    if args.base_edits.strip():
+        entries = [dict(e, args=edit_args(e['args'], args.base_edits)) if e.get('type') == 'xnu' else e for e in entries]
     for key in generated:
         if key not in ('version', 'boot', 'kits', 'entry', 'ui'):
             raise SystemExit(f'unexpected section [{key}] in the generated menu: review this script first')
@@ -210,7 +217,10 @@ def main():
     if 'ui' in generated:
         out += table('ui', generated['ui']) + '\n'
     out += table('kits', generated.get('kits', {'autoload': False})) + '\n'
+    install_entries = [e for e in entries if e.get('id') == 'install']
     for entry in entries:
+        if entry.get('id') == 'install':
+            continue
         out += table('[entry]', entry) + '\n'
         if entry.get('id') == 'xnu':
             for spec in args.variant:
@@ -220,14 +230,26 @@ def main():
     out += table('[entry]', {'id': 'recovery', 'title': 'Reboot to TWRP Recovery', 'type': 'efi', 'path': RECOVERY_SWITCH}) + '\n'
     out += table('[entry]', {'id': 'fastboot', 'title': 'Reboot to Fastboot', 'type': 'efi', 'path': FASTBOOT_SWITCH}) + '\n'
     out += table('[entry]', {'id': 'shutdown', 'title': 'Power off', 'type': 'action', 'action': 'shutdown'})
+    for entry in install_entries:
+        out += '\n' + table('[entry]', entry)
     check = loads_menu_toml(out)
     ids = [e['id'] for e in check['entry']]
     assert check['boot']['default'] in ids and len(set(ids)) == len(ids)
+    for e in check['entry']:
+        if e.get('type') == 'xnu':
+            arg_len = len(e['args'].encode('utf-8'))
+            if arg_len > 1000:
+                raise SystemExit(f"entry {e['id']}: args length {arg_len} > 1000 bytes")
+            if 'confirm_args' in e:
+                for c in e['confirm_args']:
+                    full_len = len((e['args'] + ' ' + c).encode('utf-8'))
+                    if full_len > 1016:
+                        raise SystemExit(f"entry {e['id']} + {c!r}: args length {full_len} > 1016 bytes")
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / 'unixnu.toml'
         path.write_bytes(out.encode('utf-8'))
-        subprocess.run(['mcopy', '-o', '-m', '-i', str(args.image), str(path), CONFIG], env=env, check=True, capture_output=True)
-    back = subprocess.run(['mtype', '-i', str(args.image), CONFIG], env=env, check=True, capture_output=True).stdout.decode()
+        subprocess.run([mcopy_bin, '-o', '-m', '-i', str(args.image), str(path), CONFIG], env=env, check=True, capture_output=True)
+    back = subprocess.run([mtype_bin, '-i', str(args.image), CONFIG], env=env, check=True, capture_output=True).stdout.decode()
     assert back == out, 'readback of the rewritten menu differs'
     digest = hashlib.sha256(args.image.read_bytes()).hexdigest()
     report = {'image': args.image.name, 'sha256': digest, 'bytes': args.image.stat().st_size, 'entries': ids,
