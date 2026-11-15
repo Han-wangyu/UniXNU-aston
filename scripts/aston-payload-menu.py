@@ -19,15 +19,129 @@ import json
 import os
 import subprocess
 import tempfile
-import tomllib
 from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    try:
+        import tomli as tomllib  # type: ignore[no-redef]
+    except ModuleNotFoundError:
+        tomllib = None
 
 CONFIG = '::/EFI/UniXNU/unixnu.toml'
 # Ace3-UniXNU efi/AstonSlotSwitch (FILE_GUID), resolved by UniXNU from the firmware volume.
 SLOT_SWITCH = 'fv:7C4F0B9E-3D2A-4B61-9E85-2F6A1C0D7B43'
 # Ace3-UniXNU efi/AstonRebootRecovery (FILE_GUID), switches back to slot B + BCB boot-recovery.
 RECOVERY_SWITCH = 'fv:8D5E1C2A-4F3B-4E72-A9C6-3B7F2D1E8A54'
+# AstonPkg/Applications/AstonRebootFastboot (FILE_GUID), reboots straight to Qualcomm fastboot.
+FASTBOOT_SWITCH = 'fv:9E6F2D3B-5A4C-4F83-B8D7-4C8E3F2A9B65'
 KEEP_TYPES = ('xnu',)
+
+
+def _strip_toml_comment(line):
+    in_dq = False
+    in_sq = False
+    escaped = False
+    for idx, ch in enumerate(line):
+        if escaped:
+            escaped = False
+            continue
+        if in_dq:
+            if ch == '\\':
+                escaped = True
+            elif ch == '"':
+                in_dq = False
+        elif in_sq:
+            if ch == "'":
+                in_sq = False
+        else:
+            if ch == '"':
+                in_dq = True
+            elif ch == "'":
+                in_sq = True
+            elif ch == '#':
+                return line[:idx]
+    return line
+
+
+def _parse_toml_value(raw):
+    raw = raw.strip()
+    if raw == 'true':
+        return True
+    if raw == 'false':
+        return False
+    if raw.startswith('"') and raw.endswith('"'):
+        return json.loads(raw)
+    if raw.startswith("'") and raw.endswith("'") and len(raw) >= 2:
+        return raw[1:-1]
+    if raw.startswith('[') and raw.endswith(']'):
+        inner = raw[1:-1].strip()
+        if not inner:
+            return []
+        items = []
+        cur = []
+        in_dq = False
+        in_sq = False
+        escaped = False
+        for ch in inner:
+            if escaped:
+                cur.append(ch)
+                escaped = False
+            elif in_dq:
+                cur.append(ch)
+                if ch == '\\':
+                    escaped = True
+                elif ch == '"':
+                    in_dq = False
+            elif in_sq:
+                cur.append(ch)
+                if ch == "'":
+                    in_sq = False
+            else:
+                if ch == '"':
+                    in_dq = True
+                    cur.append(ch)
+                elif ch == "'":
+                    in_sq = True
+                    cur.append(ch)
+                elif ch == ',':
+                    part = ''.join(cur).strip()
+                    if part:
+                        items.append(_parse_toml_value(part))
+                    cur = []
+                else:
+                    cur.append(ch)
+        tail = ''.join(cur).strip()
+        if tail:
+            items.append(_parse_toml_value(tail))
+        return items
+    return int(raw, 0)
+
+
+def loads_menu_toml(text):
+    if tomllib is not None:
+        return tomllib.loads(text)
+    root = {}
+    target = root
+    for raw_line in text.splitlines():
+        line = _strip_toml_comment(raw_line).strip()
+        if not line:
+            continue
+        if line.startswith('[[') and line.endswith(']]'):
+            name = line[2:-2].strip()
+            target = {}
+            root.setdefault(name, []).append(target)
+            continue
+        if line.startswith('[') and line.endswith(']'):
+            name = line[1:-1].strip()
+            target = root.setdefault(name, {})
+            continue
+        key, sep, val = line.partition('=')
+        if not sep:
+            raise ValueError(f'invalid TOML line: {line!r}')
+        target[key.strip()] = _parse_toml_value(val)
+    return root
 
 
 def value(v):
@@ -74,11 +188,15 @@ def main():
     parser.add_argument('--timeout', type=int, default=10)
     parser.add_argument('--default', default='slot-b')
     parser.add_argument('--variant', action='append', default=[], metavar="'ID|TITLE|EDITS'")
+    parser.add_argument('--drop-variants', action='store_true',
+                        help='keep only xnu and install from existing xnu entries before applying --variant')
     args = parser.parse_args()
     env = dict(os.environ, MTOOLS_SKIP_CHECK='1', TZ='UTC')
     text = subprocess.run(['mtype', '-i', str(args.image), CONFIG], env=env, check=True, capture_output=True).stdout
-    generated = tomllib.loads(text.decode())
+    generated = loads_menu_toml(text.decode())
     entries = [e for e in generated.get('entry', []) if e.get('type') in KEEP_TYPES]
+    if args.drop_variants:
+        entries = [e for e in entries if e.get('id') in ('xnu', 'install')]
     if not entries or not any(e.get('id') == 'xnu' for e in entries):
         raise SystemExit('the generated menu has no xnu entry: not a `unixnu build payload` volume')
     for key in generated:
@@ -100,20 +218,21 @@ def main():
                 out += table('[entry]', dict(entry, id=vid, title=title, args=edit_args(entry['args'], edits))) + '\n'
     out += table('[entry]', {'id': 'slot-b', 'title': 'Switch to slot B', 'type': 'efi', 'path': SLOT_SWITCH}) + '\n'
     out += table('[entry]', {'id': 'recovery', 'title': 'Reboot to TWRP Recovery', 'type': 'efi', 'path': RECOVERY_SWITCH}) + '\n'
+    out += table('[entry]', {'id': 'fastboot', 'title': 'Reboot to Fastboot', 'type': 'efi', 'path': FASTBOOT_SWITCH}) + '\n'
     out += table('[entry]', {'id': 'shutdown', 'title': 'Power off', 'type': 'action', 'action': 'shutdown'})
-    check = tomllib.loads(out)
+    check = loads_menu_toml(out)
     ids = [e['id'] for e in check['entry']]
     assert check['boot']['default'] in ids and len(set(ids)) == len(ids)
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / 'unixnu.toml'
-        path.write_text(out, encoding='utf-8', newline='\n')
+        path.write_bytes(out.encode('utf-8'))
         subprocess.run(['mcopy', '-o', '-m', '-i', str(args.image), str(path), CONFIG], env=env, check=True, capture_output=True)
     back = subprocess.run(['mtype', '-i', str(args.image), CONFIG], env=env, check=True, capture_output=True).stdout.decode()
     assert back == out, 'readback of the rewritten menu differs'
     digest = hashlib.sha256(args.image.read_bytes()).hexdigest()
     report = {'image': args.image.name, 'sha256': digest, 'bytes': args.image.stat().st_size, 'entries': ids,
               'default': args.default, 'timeout': args.timeout, 'generated_entries': [e.get('id') for e in generated.get('entry', [])]}
-    Path(str(args.image) + '.menu.json').write_text(json.dumps(report, indent=2) + '\n')
+    Path(str(args.image) + '.menu.json').write_bytes((json.dumps(report, indent=2) + '\n').encode('utf-8'))
     print(out)
     print(f'menu rewritten: {ids}, default {args.default}; payload sha256 {digest}')
 

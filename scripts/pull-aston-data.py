@@ -31,7 +31,7 @@ RESERVE_BLOCKS = 1024 * 256     # the log reserve at the end of unixnu (1024 MiB
 def adb(args, *cmd, data=False):
     if args.android and cmd[0] in ('shell', 'exec-out'):
         cmd = (cmd[0], 'su -c ' + shlex.quote(' '.join(cmd[1:])))
-    out = subprocess.run([args.adb, '-s', SERIAL, *cmd], check=True, capture_output=True, stdin=subprocess.DEVNULL).stdout
+    out = subprocess.run([args.adb, '-s', args.serial, *cmd], check=True, capture_output=True, stdin=subprocess.DEVNULL).stdout
     return out if data else out.decode().strip()
 
 
@@ -58,6 +58,7 @@ def seed_logical(seed):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--adb', required=True)
+    parser.add_argument('--serial', default=SERIAL)
     parser.add_argument('--seed', required=True, type=Path)
     parser.add_argument('--out', required=True, type=Path)
     parser.add_argument('--android', action='store_true', help='a rooted Android instead of TWRP: reads run through su')
@@ -101,7 +102,7 @@ def main():
     args.out.mkdir(parents=True, exist_ok=True)
     base = start + 1 + bitmap_blocks
     script = args.out / 'pull.sh'
-    script.write_text(''.join(f'dd if={PART} bs={BLOCK} skip={base + i} count={n} 2>/dev/null\n' for i, n in runs), newline='\n')
+    script.write_bytes(''.join(f'dd if={PART} bs={BLOCK} skip={base + i} count={n} 2>/dev/null\n' for i, n in runs).encode('utf-8'))
     adb(args, 'push', str(script), remote)
     there = adb(args, 'shell', f'sh {remote} | sha256sum').split()[0]
     digest = hashlib.sha256()

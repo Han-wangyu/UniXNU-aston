@@ -12,7 +12,7 @@ Usage:
     --window OS=/path/to/OS.dmg --window SystemOS=/path/to/SystemOS.dmg \\
     --object OS.vroot=/path/to/OS.vroot --object SystemOS.vroot=/path/to/SystemOS.vroot \\
     --object Payload=/path/to/payload.img --object Wifi=/path/to/wifi.obj \\
-    [--adb /path/to/adb] [--serial ed5f732f] [--update-payload-only] [--yes]
+    [--adb /path/to/adb] [--serial ed5f732f] [--update-payload-only] [--init-store-and-log] [--yes]
 """
 import argparse
 import hashlib
@@ -33,7 +33,12 @@ PART = '/dev/block/sda15'
 USERDATA_PART = '/dev/block/sda14'
 PART_BYTES = 34359738368              # 8388608 * 4096
 PART_START_BYTES = 115424000 * 4096
-STORE_START_BYTES = 4456335 * 4096    # SHNGDATA store header at block 4456335
+STORE_START_BLOCK = 4456335           # SHNGDATA store header at block 4456335
+STORE_START_BYTES = STORE_START_BLOCK * 4096
+STORE_INIT_ZERO_BLOCKS = 512          # 2 MiB header+bitmap clear -> native_data_persist_state == 3 cleanly
+PROBE_REPORT_BLOCK = 4194304          # Non-destructive UEFI probe report LBA (16 GiB offset)
+EXPORT_START_BLOCK = 8314880          # ShengUfs panic/diag export ring start (65536 blocks)
+BOOTLOG_START_BLOCK = 8380416         # ShengUfs boot log ring start (8192 blocks)
 
 SHNGROOT_MAGIC = b'SHNGROOT'
 HEADER_SIZE = 4096
@@ -187,6 +192,21 @@ class AdbPhone:
             self.shell(f'rm -f {remote}')
         print(f'written   {skip_mib}..{skip_mib + count_mib} MiB ({expected_sha[:12]})', flush=True)
 
+    def zero_4k_region_checked(self, start_block, count_blocks, label):
+        require(start_block >= 256 and count_blocks > 0 and start_block + count_blocks <= PART_BYTES // 4096,
+                f'refusing out-of-range zero on {label}: {start_block}+{count_blocks}')
+        expected_sha = hashlib.sha256(b'\x00' * (count_blocks * 4096)).hexdigest()
+        cmd_hash = f'dd if={PART} bs=4096 skip={start_block} count={count_blocks} 2>/dev/null | sha256sum'
+        before = self.shell(cmd_hash).split()[0]
+        if before == expected_sha:
+            print(f'already zeroed {label} ({count_blocks}x4K @ {start_block})', flush=True)
+            return
+        self.shell(f'dd if=/dev/zero of={PART} bs=4096 seek={start_block} count={count_blocks} conv=notrunc,fsync 2>&1')
+        self.shell('sync; echo 3 > /proc/sys/vm/drop_caches')
+        after = self.shell(cmd_hash).split()[0]
+        require(after == expected_sha, f'zero verify failed on {label}: got {after}, want {expected_sha}')
+        print(f'zeroed    {label} ({count_blocks}x4K @ {start_block}, sha256 {after[:12]})', flush=True)
+
 
 def stream_entry_chunks(phone, entry, tmpdir):
     piece_path = tmpdir / 'piece.bin'
@@ -250,8 +270,12 @@ def main():
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--manifest-out', type=Path)
     parser.add_argument('--update-payload-only', action='store_true')
+    parser.add_argument('--init-store-and-log', action='store_true',
+                        help='zero SHNGDATA header+bitmap and ShengUfs log/export headers before writing SHNGROOT')
     parser.add_argument('--yes', action='store_true')
     args = parser.parse_args()
+    require(not (args.init_store_and_log and args.update_payload_only),
+            '--init-store-and-log cannot be combined with --update-payload-only')
 
     entries, total, version, manifest_mib = build_layout(args.window, args.object)
     summary = {
@@ -261,6 +285,11 @@ def main():
         'total_bytes': total,
         'total_mib': total // MIB,
         'store_start_bytes': STORE_START_BYTES,
+        'store_start_block': STORE_START_BLOCK,
+        'init_store_and_log': args.init_store_and_log,
+        'probe_report_block': PROBE_REPORT_BLOCK,
+        'export_start_block': EXPORT_START_BLOCK,
+        'bootlog_start_block': BOOTLOG_START_BLOCK,
         'headroom_bytes': STORE_START_BYTES - total,
         'manifest_sha256': hashlib.sha256(manifest_mib[:HEADER_SIZE]).hexdigest(),
         'manifest_mib_sha256': hashlib.sha256(manifest_mib).hexdigest(),
@@ -305,6 +334,12 @@ def main():
             require(readback == entry_padded_sha,
                     f'readback mismatch for {entry["name"]}: phone={readback} expected={entry_padded_sha}')
             written_padded[entry['name']] = entry_padded_sha
+
+        if args.init_store_and_log:
+            print('==> Zeroing SHNGDATA store head and ShengUfs log/export headers', flush=True)
+            phone.zero_4k_region_checked(STORE_START_BLOCK, STORE_INIT_ZERO_BLOCKS, 'SHNGDATA-head')
+            phone.zero_4k_region_checked(EXPORT_START_BLOCK, 16, 'ShengUfs-export-head')
+            phone.zero_4k_region_checked(BOOTLOG_START_BLOCK, 256, 'ShengUfs-bootlog-head')
 
         manifest_file = tmpdir / 'manifest.bin'
         manifest_file.write_bytes(manifest_mib)
