@@ -22,17 +22,17 @@
 // non-turbo level (or the cap). The XNU CPU numbers follow the DTS cpu order: cpus 0-2 are the A510 cores (domain 0, the E cluster),
 // cpus 3-6 the A715/A710 cores (domain 1), cpu 7 the X3 (domain 2).
 // Touch boost: when the touch report count moves, the P domains (1, 2) hold their highest allowed level until
-// `sheng-cpufreq-boost-ms=<ms>` (default 1000, 0 = off) after the last report, so an app launch or a scroll starts at full speed
+// `sheng-cpufreq-boost-ms=<ms>` (default 500, 0 = off) after the last report, so an app launch or a scroll starts at full speed
 // instead of ramping by 1.25x per window. Outside a boost the P domains stop at the lowest level at or above half their highest
 // one, and go lower only after 12 windows in a row under 10 % busy.
 // Frame floor: GPU submits (NativeAdreno's submit count) in 2 of the last 4 windows keep every domain at or above
-// `sheng-cpufreq-frame-pct=<n>` (default 60) % of its highest level for `sheng-cpufreq-frame-ms=<ms>` (default 300, 0 = off), the E
+// `sheng-cpufreq-frame-pct=<n>` (default 60) % of its highest level for `sheng-cpufreq-frame-ms=<ms>` (default 250, 0 = off), the E
 // domain included: the render server also runs on the A510 cores (i566 profile: 23 % of backboardd's samples on cpus 0-2) and they
 // sat at 307 MHz. i565 held the P domains at the top during frames and counted a domain's busy share as the sum of its CPUs: d1 then
 // never left 2803 MHz (99 % busy), so both are gone; a touch still holds the P domains at the top.
 // Board tuning (aston, 2026-11-12: warm at rest, the A715/A710 domain at a mean 2043 MHz with its busiest CPU 42 % busy; Android runs
-// WALT with uag at target load 80 and a hispeed frequency, not the top): `sheng-cpufreq-pfloor-pct=<n>` (default 0; sheng's 50) is the P domains'
-// floor outside a boost and the 12 quiet windows, in % of their highest level (0: none); `sheng-cpufreq-hispeed-pct=<n>` (default 60; sheng's 100)
+// WALT with uag at target load 80 and a hispeed frequency, not the top): `sheng-cpufreq-pfloor-pct=<n>` (default 35; sheng's 50) is the P domains'
+// floor outside a boost and the 12 quiet windows, in % of their highest level (0: none); `sheng-cpufreq-hispeed-pct=<n>` (default 85; sheng's 100)
 // is where a domain whose busiest CPU reached 90 % jumps to, in % of its highest level: below it the domain goes there, at or above it
 // the usual 1.25 x busy x frequency applies (100: the highest level, as before); `sheng-cpufreq-l3=2` (the default) lets the L3 follow
 // the CPUs, at the lowest L3 level at or above the highest of the domains' frequency shares of their maxima (1: mode 3's highest L3 level).
@@ -180,7 +180,7 @@ struct Levels {
 };
 Levels gLevels[3];
 uint32_t gFloorKHz;
-unsigned gBoostMs, gFrameMs, gFramePct, gPFloorPct = 0, gHispeedPct = 60, gL3Mode = 2;
+unsigned gBoostMs, gFrameMs, gFramePct, gPFloorPct = 35, gHispeedPct = 85, gL3Mode = 2;
 // sheng-cpufreq-l3=2: the L3's LUT levels in ascending frequency, as buildLevels makes them for a domain (the L3 has no turbo rows).
 Levels gL3Levels;
 void buildL3Levels() {
@@ -382,7 +382,7 @@ extern "C" void sheng_cpufreq_poll(void) {
 }
 
 extern "C" void sheng_cpufreq_probe(void) {
-    unsigned mode = 0, capMHz = 0, minMHz = 0, boostMs = 1000, frameMs = 300, framePct = 60;
+    unsigned mode = 0, capMHz = 0, minMHz = 0, boostMs = 500, frameMs = 250, framePct = 60;
     PE_parse_boot_argn("sheng-cpufreq", &mode, sizeof(mode));
     PE_parse_boot_argn("sheng-cpufreq-cap", &capMHz, sizeof(capMHz));
     PE_parse_boot_argn("sheng-cpufreq-min", &minMHz, sizeof(minMHz));

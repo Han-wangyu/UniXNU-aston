@@ -1788,7 +1788,7 @@ void gpuStart() {
 // Two boosts, because the first frames of an animation are the ones a window-based governor serves at the floor (i560: the frames of an
 // app launch took 30-36 ms to finish at 348 MHz, the 10 s windows around them 348 MHz 94-100 % of the time): work after the idle drop
 // starts at the lowest level at or above max(2 x now, 578 MHz) for 50 ms, and a touch report holds the top level until
-// `sheng-gpu-dcvs-boost-ms` (default 300, sheng's 1000; 0 = off) after the last one: aston boot 8 spent 72-88 % of its time at 680 MHz
+// `sheng-gpu-dcvs-boost-ms` (default 500, sheng's 1000; 0 = off) after the last one: matched with the tuned 500 ms CPU touch boost
 // with the GPU 27-32 % busy. [13] counts the touch boosts started.
 constexpr uint32_t kGpuMHz[9] = {0, 220, 295, 348, 401, 475, 550, 615, 680};
 constexpr unsigned kGpuTop = 8;
@@ -1876,7 +1876,7 @@ void gpuDcvsThread(void *, wait_result_t) {
     uint64_t runNs = 0, winBusy = 0, winNs = 0, atLevel[kGpuTop + 1] = {};
     unsigned down = 0, hold = 0;
     uint64_t boostAbs = 0, touchEnd = 0, wakeEnd = 0, wakeAbs = 0;
-    nanoseconds_to_absolutetime((uint64_t)bootArg("sheng-gpu-dcvs-boost-ms", 300) * 1000000, &boostAbs);
+    nanoseconds_to_absolutetime((uint64_t)bootArg("sheng-gpu-dcvs-boost-ms", 500) * 1000000, &boostAbs);
     nanoseconds_to_absolutetime(50000000ull, &wakeAbs);
     uint32_t touches = &native_hid_input_events ? native_hid_input_events[6] : 0;
     bool idle = false;
