@@ -819,6 +819,7 @@ RunUefiHardwareProbeAndReboot (
       "AstonProbe: unixnu LBA0 HasManifest=%u\n",
       HasManifest ? 1U : 0U
       ));
+    (VOID)HasManifest;
 
     if ((Unixnu.BlockSize > 0) &&
         (UnixnuBlocks > ASTON_PROBE_REPORT_REL_LBA) &&
