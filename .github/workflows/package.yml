@@ -220,7 +220,8 @@ jobs:
           python3 UniXNU-aston/scripts/check-aston-display-window.py
           PYTHONPATH=UniXNU/scripts python3 UniXNU/scripts/test-runtime-inputs.py
       - name: GPU userspace cache
-        uses: actions/cache@v4
+        id: gpu-cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             ${{ env.WORK }}/tree/.cache/mesa-work
@@ -229,9 +230,12 @@ jobs:
             ${{ env.WORK }}/tree/build/mesa-tu-ios27.cross
             ${{ env.WORK }}/tree/build/m2v-target
             ${{ env.WORK }}/tree/build/adreno-metal-bridge
-          key: aston-ios27-gpu-v1-${{ hashFiles('UniXNU/scripts/data/adreno-compiler-inputs.json', 'UniXNU/scripts/data/gpu-metal-vulkan-inputs.json', 'UniXNU/scripts/build-turnip-darwin.py', 'UniXNU/scripts/build-adreno-metal-bridge.py', 'UniXNU/drivers/AdrenoMetal/**', 'UniXNU-aston/scripts/fix-upstream-mesa-patch.py', 'UniXNU-aston/unixnu-patches/**') }}
+          key: aston-ios27-gpu-v1-${{ hashFiles('UniXNU/scripts/data/adreno-compiler-inputs.json', 'UniXNU/scripts/data/gpu-metal-vulkan-inputs.json', 'UniXNU/scripts/build-turnip-darwin.py', 'UniXNU/scripts/build-adreno-metal-bridge.py', 'UniXNU/drivers/AdrenoMetal/**', 'UniXNU-aston/scripts/fix-upstream-mesa-patch.py', 'UniXNU-aston/unixnu-patches/AdrenoMetal/**') }}
+          restore-keys: |
+            aston-ios27-gpu-v1-
       - name: XNU reference and feeds cache
-        uses: actions/cache@v4
+        id: xnu-ref-cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             UniXNU/out/feeds
@@ -240,7 +244,7 @@ jobs:
             ${{ env.WORK }}/tree/build/libpthread-kernel
             ${{ env.WORK }}/tree/build/xnu/fileset-reference/mach.release.bcm2837.unstripped.noctf
             ${{ env.WORK }}/tree/build/xnu/fileset-reference/mach.release.bcm2837.unstripped.json
-          key: aston-ios27-xnu-ref-v1-${{ hashFiles('UniXNU-aston/patches/xnu-12377/**', 'UniXNU-aston/unixnu-patches/**', 'UniXNU/scripts/build-fileset-release-reference.py', 'UniXNU/scripts/build-xnu-4k-baseline.sh') }}
+          key: aston-ios27-xnu-ref-v1-${{ hashFiles('UniXNU-aston/patches/xnu-12377/**', 'UniXNU-aston/unixnu-patches/0001-ios-27.0.1-24A446-iphone17-2.patch', 'UniXNU/scripts/build-fileset-release-reference.py', 'UniXNU/scripts/build-xnu-4k-baseline.sh') }}
           restore-keys: |
             aston-ios27-xnu-ref-v1-
       - name: kernel and payload
@@ -287,6 +291,30 @@ jobs:
             ${{ env.WORK }}/runtime/data.dbr
             ${{ env.WORK }}/runtime/inputs.json
           key: ${{ steps.seed-key.outputs.key }}
+      - name: save XNU reference and feeds cache
+        uses: actions/cache/save@v4
+        if: always() && steps.xnu-ref-cache.outputs.cache-hit != 'true' && hashFiles('UniXNU/out/aston/ios-27.0.1-24A446/aston_ios27/tree/build/xnu/fileset-reference/mach.release.bcm2837.unstripped.json') != ''
+        with:
+          path: |
+            UniXNU/out/feeds
+            ${{ env.WORK }}/tree/.cache/fakeroot
+            ${{ env.WORK }}/tree/build/corecrypto-2023
+            ${{ env.WORK }}/tree/build/libpthread-kernel
+            ${{ env.WORK }}/tree/build/xnu/fileset-reference/mach.release.bcm2837.unstripped.noctf
+            ${{ env.WORK }}/tree/build/xnu/fileset-reference/mach.release.bcm2837.unstripped.json
+          key: aston-ios27-xnu-ref-v1-${{ hashFiles('UniXNU-aston/patches/xnu-12377/**', 'UniXNU-aston/unixnu-patches/0001-ios-27.0.1-24A446-iphone17-2.patch', 'UniXNU/scripts/build-fileset-release-reference.py', 'UniXNU/scripts/build-xnu-4k-baseline.sh') }}
+      - name: save GPU userspace cache
+        uses: actions/cache/save@v4
+        if: always() && steps.gpu-cache.outputs.cache-hit != 'true' && hashFiles('UniXNU/out/aston/ios-27.0.1-24A446/aston_ios27/tree/build/mesa-tu-ios27/src/freedreno/vulkan/libvulkan_freedreno.dylib') != '' && hashFiles('UniXNU/out/aston/ios-27.0.1-24A446/aston_ios27/tree/build/adreno-metal-bridge/ios27/libadreno_metal_bridge.a') != ''
+        with:
+          path: |
+            ${{ env.WORK }}/tree/.cache/mesa-work
+            ${{ env.WORK }}/tree/.cache/gpu-reference
+            ${{ env.WORK }}/tree/build/mesa-tu-ios27
+            ${{ env.WORK }}/tree/build/mesa-tu-ios27.cross
+            ${{ env.WORK }}/tree/build/m2v-target
+            ${{ env.WORK }}/tree/build/adreno-metal-bridge
+          key: aston-ios27-gpu-v1-${{ hashFiles('UniXNU/scripts/data/adreno-compiler-inputs.json', 'UniXNU/scripts/data/gpu-metal-vulkan-inputs.json', 'UniXNU/scripts/build-turnip-darwin.py', 'UniXNU/scripts/build-adreno-metal-bridge.py', 'UniXNU/drivers/AdrenoMetal/**', 'UniXNU-aston/scripts/fix-upstream-mesa-patch.py', 'UniXNU-aston/unixnu-patches/AdrenoMetal/**') }}
       - name: installation seed backup
         if: always() && hashFiles('UniXNU/out/aston/ios-27.0.1-24A446/aston_ios27/runtime/data.dbr') != ''
         uses: actions/upload-artifact@v4
