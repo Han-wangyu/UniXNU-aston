@@ -31,6 +31,12 @@ AstonSha256 (
   OUT UINT8       Digest[32]
   );
 
+VOID
+EFIAPI
+AstonConnectAllControllers (
+  VOID
+  );
+
 EFI_STATUS
 EFIAPI
 AstonFindGptPartition (
