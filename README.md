@@ -5,9 +5,10 @@ It is derived from [UniXNU-sheng](https://github.com/UniXNU/UniXNU-sheng) `68940
 (Xiaomi Pad 6S Pro, the reference SM8550 board) and follows its iPadOS 27.0.1 (24A446) chain. The package keeps the
 reference kit name `sheng` and the `sheng-*` boot argument names, which the shared scripts address.
 
-The first phone boot reached SpringBoard with touch on the CPU display path, as recorded in `board.toml`.
-The current CPU and Data changes still need a phone test. See the [fix review](reports/cpu-storage-fix.md) and
-[porting record](porting.toml); inherited sheng results do not qualify aston hardware.
+Verified on China-region OnePlus Ace 3 (`PJE110`, ColorOS 16 dual-boot on `Slot B`): boots **iOS 27.0.1 (`24A446`)** into
+SpringBoard with Adreno 740 GPU (`a740_zap.mbn` + Turnip/`metal2vulkan`), S3910 touch, keys, DSI0 backlight, bq28z610 fuel
+gauge, WCN7850 `ath12k` Wi-Fi, and persistent 14 GiB `SHNGDATA` v1 Data storage on `sda15` (`unixnu`). See the
+[fix review](reports/cpu-storage-fix.md) and [porting record](porting.toml).
 
 ## OS profile
 
@@ -28,8 +29,7 @@ payload on a `macos-26` runner. A Linux host runs the board checks below.
 | GPU | The ZAP shader is the phone's own (`scripts/pull-aston-gpu-firmware.sh`, pin in `scripts/data/aston-gpu-inputs.json`); without it the kernel carries an empty ZAP image and the GPU stops at its ZAP step. GMU and SQE images are the reference ones. |
 | Firmware | Mu-Silicium `aston`, built and packed by the sibling `Ace3-UniXNU` repository; `[firmware]` here is unused. |
 
-Not ported yet: DCS brightness through DSI0 (the panel stays at the boot loader's level), the audio DSP and its users
-(audio, DSP battery manager), Wi-Fi, Bluetooth and USB.
+Not enabled by default yet: the audio DSP's audio/charging clients and Bluetooth. Phase 2 enables `appsync=1` (`BacklightMode.m`, switching `CoreBrightness` `VMBLControl` -> `BLControl` over `AstonPanel.cpp`/`AppleARMBacklight` for the Control Center slider and sleep/wake panel emission), tuned CPU/GPU DCVS defaults (`500 ms` touch boost, `250 ms` frame floor, `85%` hispeed, `35%` P-floor), `1 s`/`2 s` `InterfaceNamer` timeouts, and default-on DWC3 USB (`sheng-usb=1`, `sheng-aks-sls=3`).
 
 ## Checks on a Linux host
 
@@ -59,7 +59,7 @@ names Windows cannot hold).
 
 `board.toml` `[payload] kernel_args` enables S3910 touch, keys, all CPUs, CPU frequency, persistent Data, the fuel gauge,
 GPU framebuffer presentation and the log on `unixnu`. The package menu also offers the CPU display path.
-`armcpu-edge=1` completes the patched Edge scheduler setup. Touch boosts last 80 ms; the frame-driven CPU floor is disabled.
+`armcpu-edge=1` completes the patched Edge scheduler setup. Default tuned CPU/GPU governors (`package/CpuFreqProbe.cpp`, `package/GpuPowerProbe.cpp`) provide 500 ms touch boost, 250 ms frame floor (60%), 85% hispeed, and 35% P-domain floor, while `sheng-disable-watchdogd=1` and `sheng-lite=1` reside in `PE_builtin_boot_args[]` (`package/BootWatchdogPolicy.c`).
 
 The first archive step applies the reviewed RamBlock patch to an isolated build-tree copy. It verifies the original pin
 and source hash, rejects tracked source overrides, and writes `build/aston-ramblock/source.json`. Both storage recipes
@@ -78,8 +78,8 @@ The fixtures exercise policy and publication decisions with API stand-ins. They 
 
 ## Host Staging, Safety & Diagnostics
 
-- `scripts/aston-payload-menu.py`: Python 3.9+ `unixnu.toml` menu rewriter with built-in TOML fallback parser, `--drop-variants`, and `slot-b` / `recovery` / `fastboot` / `shutdown` firmware actions (`slot-b` stays default).
-- `scripts/flash-unixnu-staged.py`: streams `OS`, `SystemOS`, `OS.vroot`, `SystemOS.vroot`, `Payload`, and `Wifi` straight onto `sda15` (`unixnu`); `--init-store-and-log` zeroes the `SHNGDATA` head (`4456335` + `512` blocks) plus `SHLOG001`/export headers (`8380416`, `8314880`) before committing `SHNGROOT` at block 0.
+- `scripts/aston-payload-menu.py`: Python 3.9+ `unixnu.toml` menu rewriter with built-in TOML fallback parser, `--base-edits`, `--drop-variants`, XNU command-line length enforcement, and `slot-b` / `recovery` / `fastboot` / `shutdown` firmware actions (`slot-b` stays default).
+- `scripts/flash-unixnu-staged.py`: streams `OS`, `SystemOS`, `OS.vroot`, `SystemOS.vroot`, `Payload`, and `Wifi` straight onto `sda15` (`unixnu`); `--init-store-and-log` zeroes the `SHNGDATA` head (`4456335` + `512` blocks) plus `SHLOG001`/export headers (`8380416`, `8314880`), while `--seed-dbr` / `--seed-from-payload` / `--init-store-only` initialize the verified `SHNGDATA` v1 header before committing `SHNGROOT` at block 0.
 - `scripts/check-aston-staged-bundle.py`: offline host preflight checking LUN0 GPT (`unixnu` bounds + CRCs), `SHNGROOT` v2 digests/headroom, `unixnu.toml` `args <= 1016` B, `data.dbr` geometry, and `boot_a` `ANDROID!`/`AVBf` headers.
 - `scripts/aston-one-shot-install.py`: fail-closed TWRP deployment orchestrator enforcing immutable `boot_b` SHA-256 verification before and after flashing (`--check-only` runs offline host checks without USB).
 - `scripts/pull-aston-log.py`: read-only fetcher for `SHNGROOT` (block `0`), non-destructive `AstonProbe` UEFI reports (block `4194304`), and `SHLOG001` boot logs/exports (`8380416` / `8314880`).
