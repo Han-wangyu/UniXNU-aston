@@ -1045,9 +1045,9 @@ int main() {
     gHostDsi[0x110 / 4] = 1u;
     assert(aston_panel_open() == 0);
     assert(aston_panel_level(0) == 0);
-    assert(aston_panel_stats[6] == 3); // aston-panel-off=1 sends page 0 + 0x51 + 0x28 (3 packets)
+    assert(aston_panel_stats[6] == 1); // aston-panel-off=1 sends 0x28 only (no DBV=0, bl-min-level=1)
     assert(aston_panel_level(1638) == 0);
-    assert(aston_panel_stats[6] == 6); // wake sends 0x29 + page 0 + 0x51 (3 packets)
+    assert(aston_panel_stats[6] == 4); // wake sends 0x29 + page 0 + 0x51 (3 packets)
 
     auto *driver = new IORegistryEntry();
     driver->setProperty("PrimaryUsagePage", 0x0dULL, 32);

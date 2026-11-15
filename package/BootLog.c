@@ -1887,7 +1887,7 @@ static uint32_t log_group_on;
 static const struct {const char *prefix; uint8_t group;} log_tags[] = {
   {"gpu dcvs", LogPower}, {"gpu", LogGpu}, {"ring", LogGpu}, {"ib]", LogGpu}, {"fence", LogGpu}, {"metal", LogGpu}, {"mfb", LogGpu},
   {"bo ", LogGpu}, {"vm ", LogGpu}, {"import", LogGpu}, {"walk", LogGpu}, {"coherence", LogGpu},
-  {"display", LogDisplay}, {"direct scanout", LogDisplay}, {"scanout", LogDisplay}, {"dpu", LogDisplay}, {"swap", LogDisplay},
+  {"display", LogDisplay}, {"aston", LogDisplay}, {"direct scanout", LogDisplay}, {"scanout", LogDisplay}, {"dpu", LogDisplay}, {"swap", LogDisplay},
   {"wifi", LogWifi}, {"qrtr", LogWifi},
   {"audio", LogAudio}, {"mic", LogAudio}, {"amps", LogAudio}, {"adsp", LogAudio},
   {"touch", LogInput}, {"hid", LogInput},

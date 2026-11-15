@@ -36,9 +36,11 @@ IOMemoryMap *gMap;
 volatile uint32_t *gDsi;
 IOLock *gLock;
 bool gDisplayOff;
-// Default 0: AA551 is AMOLED (zero LED backlight), so page 0 + DCS 0x51 00 00 (DBV = 0) already yields zero-emission black standby
-// without risking High-Speed DCS 0x28/0x29 desync across Pixelworks Iris7P while DPU DSC autorefresh runs. aston-panel-off=1 opts back in.
+// Default 0: AA551 is AMOLED (zero LED backlight), so page 0 + DCS 0x51 00 00 (DBV = 0) yields black standby,
+// while aston-panel-off=1 sends DCS 0x28 on level=0 (without DBV=0, since bl-min-level is 1) and DCS 0x29 on wake.
+// aston-panel-wake11=1 also issues DCS 0x11 (Sleep Out) + 20 ms before 0x29 on wake.
 unsigned gPanelOffCmd = 0;
+unsigned gWakeSleepOut = 0;
 
 uint32_t rd(uint32_t reg) {return gDsi[reg / 4];}
 void wr(uint32_t reg, uint32_t value) {gDsi[reg / 4] = value; __asm__ volatile("dsb sy" ::: "memory");}
@@ -104,6 +106,7 @@ extern "C" int aston_panel_open(void) {
     // The controller the boot loader left running: enabled (bit 0). Off, the commands would go nowhere.
     if (!(rd(kCtrl) & 1u)) {gDsi = nullptr; aston_panel_stats[0] = -2; return -1;}
     PE_parse_boot_argn("aston-panel-off", &gPanelOffCmd, sizeof(gPanelOffCmd));
+    PE_parse_boot_argn("aston-panel-wake11", &gWakeSleepOut, sizeof(gWakeSleepOut));
     gDisplayOff = false;
     aston_panel_stats[0] = 1;
     return 0;
@@ -117,18 +120,29 @@ extern "C" int aston_panel_level(uint32_t level) {
     const uint32_t brightness[2] = {longHeader(3), 0x51u | ((level >> 8) & 0xffu) << 8 | (level & 0xffu) << 16 | 0xffu << 24};
     IOLockLock(gLock);
     int rc = 0;
-    if (level > 0 && gDisplayOff) {
-        const uint32_t on = shortHeader(0x29);
-        rc = sendPacket(&on, 1);
-        if (!rc) gDisplayOff = false;
+    if (level == 0 && gPanelOffCmd) {
+        if (!gDisplayOff) {
+            const uint32_t off = shortHeader(0x28);
+            rc = sendPacket(&off, 1);
+            if (!rc) gDisplayOff = true;
+        }
+    } else {
+        if (level > 0 && gDisplayOff) {
+            if (gWakeSleepOut) {
+                const uint32_t slpout = shortHeader(0x11);
+                rc = sendPacket(&slpout, 1);
+                if (!rc) IOSleep(20);
+            }
+            if (!rc) {
+                const uint32_t on = shortHeader(0x29);
+                rc = sendPacket(&on, 1);
+                if (!rc) gDisplayOff = false;
+            }
+        }
+        if (!rc) rc = sendPacket(page, 2);
+        if (!rc) rc = sendPacket(brightness, 2);
     }
-    if (!rc) rc = sendPacket(page, 2);
-    if (!rc) rc = sendPacket(brightness, 2);
-    if (!rc && level == 0 && gPanelOffCmd && !gDisplayOff) {
-        const uint32_t off = shortHeader(0x28);
-        rc = sendPacket(&off, 1);
-        if (!rc) gDisplayOff = true;
-    }
+    aston_panel_stats[11] = (int32_t)((level & 0xffffu) | ((uint32_t)(rc & 0xff) << 16) | (gDisplayOff ? (1u << 24) : 0u));
     IOLockUnlock(gLock);
     if (!rc) aston_panel_stats[9] = (int32_t)level;
     return rc;

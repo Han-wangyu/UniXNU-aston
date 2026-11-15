@@ -282,8 +282,8 @@ jobs:
         # (sheng-rerun-migration=1, aston-migration-rerun.patch) are out of the menu; the kernel still takes their arguments.
         run: |
           python3 UniXNU-aston/scripts/aston-payload-menu.py "$WORK/payload/payload.img" \
-            --variant "xnu-402x874|iOS 402x874 window|aston-display=1" \
-            --variant "xnu-combined-hid|iOS (combined key/touch HID)|!sheng-touch-split" \
+            --variant "xnu-wake11|iOS wake11 (0x11+0x29)|aston-panel-wake11=1 log-display=1 log-power=1" \
+            --variant "xnu-perf-lite|iOS perf-lite (no audio/icon)|sheng-disable-jobs=com.apple.cameracaptured,com.apple.audiomxd,com.apple.iconservices.iconservicesagent sheng-cpufreq-min=1200 log-display=1 log-power=1" \
             --variant "xnu-diag|iOS diag (full GPU/CPU/UI logs)|log-gpu=1 log-display=1 log-power=1 log-sys=1 log-audio=1 log-wifi=1 boot-ui-trace=1 cs-profile=1"
       - uses: actions/cache/save@v4
         if: always() && steps.data-cache.outputs.cache-hit != 'true' && hashFiles('UniXNU/out/aston/ios-27.0.1-24A446/aston_ios27/runtime/data.dbr') != ''

@@ -128,7 +128,7 @@ kernel_args = [
   "sheng-battery=2", "sheng-adsp=2",
   # Panel brightness: DCS 0x51 to the AA551 panel over DSI0 (AstonPanel.cpp) for AppleARMBacklight.cpp, paired with appsync=1
   # (BacklightMode.m switches CoreBrightness VMBLControl -> BLControl over AppleARMBacklight).
-  "sheng-backlight=2", "appsync=1",
+  "sheng-backlight=2", "appsync=1", "aston-panel-off=1",
   # USB device-mode AppleUSBDeviceMux (05ac:12ab) over DWC3 for usbmuxd / lockdownd / idevicesyslog workflows.
   "sheng-usb=1",
   # Wi-Fi: the reference board's mainline ath12k runtime (Ath12kWifi, WifiProbe/WifiNet, wpa_supplicant) on this phone's WCN7850
