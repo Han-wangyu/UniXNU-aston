@@ -98,8 +98,8 @@ typedef uint32_t UInt32;
 #include <mach/mach_time.h>
 #include <IOKit/IOReturn.h>
 #include <IOKit/IOMemoryDescriptor.h>
-typedef void *IOLock;
-static inline IOLock *IOLockAlloc(void) { return (IOLock *)calloc(1, sizeof(int)); }
+typedef struct _IOLock { int dummy; } IOLock;
+static inline IOLock *IOLockAlloc(void) { return (IOLock *)calloc(1, sizeof(IOLock)); }
 static inline void IOLockLock(IOLock *) {}
 static inline void IOLockUnlock(IOLock *) {}
 static inline void *IOMalloc(size_t sz) { return calloc(1, sz); }
