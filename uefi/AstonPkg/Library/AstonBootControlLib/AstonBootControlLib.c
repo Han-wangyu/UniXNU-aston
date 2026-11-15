@@ -360,6 +360,37 @@ ReadGptTable (
   return EFI_SUCCESS;
 }
 
+VOID
+EFIAPI
+AstonConnectAllControllers (
+  VOID
+  )
+{
+  EFI_STATUS  Status;
+  EFI_HANDLE  *Handles;
+  UINTN       HandleCount;
+  UINTN       Index;
+
+  Handles     = NULL;
+  HandleCount = 0;
+  Status      = gBS->LocateHandleBuffer (
+                       AllHandles,
+                       NULL,
+                       NULL,
+                       &HandleCount,
+                       &Handles
+                       );
+  if (EFI_ERROR (Status) || (Handles == NULL)) {
+    return;
+  }
+
+  for (Index = 0; Index < HandleCount; Index++) {
+    gBS->ConnectController (Handles[Index], NULL, NULL, TRUE);
+  }
+
+  FreePool (Handles);
+}
+
 EFI_STATUS
 EFIAPI
 AstonFindGptPartition (
@@ -371,6 +402,7 @@ AstonFindGptPartition (
   EFI_HANDLE                  *Handles;
   UINTN                       HandleCount;
   UINTN                       Index;
+  UINTN                       Attempt;
   EFI_BLOCK_IO_PROTOCOL       *BlockIo;
   EFI_PARTITION_TABLE_HEADER  Header;
   UINT8                       *Entries;
@@ -382,52 +414,63 @@ AstonFindGptPartition (
     return EFI_INVALID_PARAMETER;
   }
 
-  Status = gBS->LocateHandleBuffer (
-                  ByProtocol,
-                  &gEfiBlockIoProtocolGuid,
-                  NULL,
-                  &HandleCount,
-                  &Handles
-                  );
-  if (EFI_ERROR (Status)) {
-    return Status;
-  }
-
-  for (Index = 0; Index < HandleCount; Index++) {
-    Status = gBS->HandleProtocol (Handles[Index], &gEfiBlockIoProtocolGuid, (VOID **)&BlockIo);
-    if (EFI_ERROR (Status) || !IsRawUfsLun (BlockIo)) {
-      continue;
+  Status = EFI_NOT_FOUND;
+  for (Attempt = 0; Attempt < 2; Attempt++) {
+    if (Attempt > 0) {
+      AstonConnectAllControllers ();
     }
 
-    Entries = NULL;
-    Status  = ReadGptTable (BlockIo, 1, &Header, &Entries, &EntriesBufBytes);
+    Handles     = NULL;
+    HandleCount = 0;
+    Status      = gBS->LocateHandleBuffer (
+                         ByProtocol,
+                         &gEfiBlockIoProtocolGuid,
+                         NULL,
+                         &HandleCount,
+                         &Handles
+                         );
     if (EFI_ERROR (Status)) {
       continue;
     }
 
-    for (EntryIndex = 0; EntryIndex < Header.NumberOfPartitionEntries; EntryIndex++) {
-      Entry = (EFI_PARTITION_ENTRY *)(Entries + (UINTN)EntryIndex * Header.SizeOfPartitionEntry);
-      if (IsZeroGuid (&Entry->PartitionTypeGUID)) {
+    for (Index = 0; Index < HandleCount; Index++) {
+      Status = gBS->HandleProtocol (Handles[Index], &gEfiBlockIoProtocolGuid, (VOID **)&BlockIo);
+      if (EFI_ERROR (Status) || !IsRawUfsLun (BlockIo)) {
         continue;
       }
 
-      if (NamesEqualNoCase (Entry->PartitionName, PartitionName)) {
-        Partition->BlockIo     = BlockIo;
-        Partition->MediaId     = BlockIo->Media->MediaId;
-        Partition->StartingLba = Entry->StartingLBA;
-        Partition->EndingLba   = Entry->EndingLBA;
-        Partition->BlockSize   = BlockIo->Media->BlockSize;
-        FreePool (Entries);
-        FreePool (Handles);
-        return EFI_SUCCESS;
+      Entries = NULL;
+      Status  = ReadGptTable (BlockIo, 1, &Header, &Entries, &EntriesBufBytes);
+      if (EFI_ERROR (Status)) {
+        continue;
       }
+
+      for (EntryIndex = 0; EntryIndex < Header.NumberOfPartitionEntries; EntryIndex++) {
+        Entry = (EFI_PARTITION_ENTRY *)(Entries + (UINTN)EntryIndex * Header.SizeOfPartitionEntry);
+        if (IsZeroGuid (&Entry->PartitionTypeGUID)) {
+          continue;
+        }
+
+        if (NamesEqualNoCase (Entry->PartitionName, PartitionName)) {
+          Partition->BlockIo     = BlockIo;
+          Partition->MediaId     = BlockIo->Media->MediaId;
+          Partition->StartingLba = Entry->StartingLBA;
+          Partition->EndingLba   = Entry->EndingLBA;
+          Partition->BlockSize   = BlockIo->Media->BlockSize;
+          FreePool (Entries);
+          FreePool (Handles);
+          return EFI_SUCCESS;
+        }
+      }
+
+      FreePool (Entries);
     }
 
-    FreePool (Entries);
+    FreePool (Handles);
+    Status = EFI_NOT_FOUND;
   }
 
-  FreePool (Handles);
-  return EFI_NOT_FOUND;
+  return Status;
 }
 
 EFI_STATUS
@@ -440,30 +483,42 @@ AstonGetBootLu (
   EFI_HANDLE                 *Handles;
   UINTN                      Count;
   UINTN                      Index;
+  UINTN                      Attempt;
   EFI_MEM_CARDINFO_PROTOCOL  *CardInfo;
 
   if (BootLu == NULL) {
     return EFI_INVALID_PARAMETER;
   }
 
-  Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiMemCardInfoProtocolGuid, NULL, &Count, &Handles);
-  if (EFI_ERROR (Status)) {
-    return Status;
-  }
-
   Status = EFI_NOT_FOUND;
-  for (Index = 0; Index < Count; Index++) {
-    if (!EFI_ERROR (gBS->HandleProtocol (Handles[Index], &gEfiMemCardInfoProtocolGuid, (VOID **)&CardInfo)) &&
-        (CardInfo->GetBootLU != NULL))
-    {
-      Status = CardInfo->GetBootLU (CardInfo, BootLu);
-      if (!EFI_ERROR (Status)) {
-        break;
+  for (Attempt = 0; Attempt < 2; Attempt++) {
+    if (Attempt > 0) {
+      AstonConnectAllControllers ();
+    }
+
+    Handles = NULL;
+    Count   = 0;
+    Status  = gBS->LocateHandleBuffer (ByProtocol, &gEfiMemCardInfoProtocolGuid, NULL, &Count, &Handles);
+    if (EFI_ERROR (Status)) {
+      continue;
+    }
+
+    Status = EFI_NOT_FOUND;
+    for (Index = 0; Index < Count; Index++) {
+      if (!EFI_ERROR (gBS->HandleProtocol (Handles[Index], &gEfiMemCardInfoProtocolGuid, (VOID **)&CardInfo)) &&
+          (CardInfo->GetBootLU != NULL))
+      {
+        Status = CardInfo->GetBootLU (CardInfo, BootLu);
+        if (!EFI_ERROR (Status)) {
+          FreePool (Handles);
+          return EFI_SUCCESS;
+        }
       }
     }
+
+    FreePool (Handles);
   }
 
-  FreePool (Handles);
   return Status;
 }
 
@@ -477,6 +532,7 @@ AstonSetBootLu (
   EFI_HANDLE                 *Handles;
   UINTN                      Count;
   UINTN                      Index;
+  UINTN                      Attempt;
   EFI_MEM_CARDINFO_PROTOCOL  *CardInfo;
   BOOLEAN                    AnySuccess;
   UINT32                     CurrentBootLu;
@@ -486,28 +542,37 @@ AstonSetBootLu (
     return EFI_SUCCESS;
   }
 
-  Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiMemCardInfoProtocolGuid, NULL, &Count, &Handles);
-  if (EFI_ERROR (Status)) {
-    return Status;
-  }
-
   AnySuccess = FALSE;
   Status     = EFI_UNSUPPORTED;
-  for (Index = 0; Index < Count; Index++) {
-    if (!EFI_ERROR (gBS->HandleProtocol (Handles[Index], &gEfiMemCardInfoProtocolGuid, (VOID **)&CardInfo)) &&
-        (CardInfo->SetBootLU != NULL))
-    {
-      Status = CardInfo->SetBootLU (CardInfo, TargetBootLu);
-      if (!EFI_ERROR (Status)) {
-        AnySuccess = TRUE;
-        break;
+  for (Attempt = 0; Attempt < 2; Attempt++) {
+    if (Attempt > 0) {
+      AstonConnectAllControllers ();
+    }
+
+    Handles = NULL;
+    Count   = 0;
+    Status  = gBS->LocateHandleBuffer (ByProtocol, &gEfiMemCardInfoProtocolGuid, NULL, &Count, &Handles);
+    if (EFI_ERROR (Status)) {
+      continue;
+    }
+
+    Status = EFI_UNSUPPORTED;
+    for (Index = 0; Index < Count; Index++) {
+      if (!EFI_ERROR (gBS->HandleProtocol (Handles[Index], &gEfiMemCardInfoProtocolGuid, (VOID **)&CardInfo)) &&
+          (CardInfo->SetBootLU != NULL))
+      {
+        Status = CardInfo->SetBootLU (CardInfo, TargetBootLu);
+        if (!EFI_ERROR (Status)) {
+          AnySuccess = TRUE;
+          break;
+        }
       }
     }
-  }
 
-  FreePool (Handles);
-  if (AnySuccess) {
-    return EFI_SUCCESS;
+    FreePool (Handles);
+    if (AnySuccess) {
+      return EFI_SUCCESS;
+    }
   }
 
   CurrentBootLu = 0;
@@ -649,6 +714,7 @@ AstonSwitchToSlotB (
   UINT64                      NewAttrA;
   UINT64                      NewAttrB;
 
+  AstonConnectAllControllers ();
   BootLuStatus = AstonSetBootLu (2);
   DEBUG ((DEBUG_INFO, "AstonSwitchToSlotB: SetBootLU(2) -> %r\n", BootLuStatus));
 
