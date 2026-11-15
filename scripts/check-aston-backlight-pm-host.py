@@ -30,7 +30,16 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 
 MOCK_HEADERS = {
-    'sys/types.h': '#pragma once\n#include <stdint.h>\n#include <stddef.h>\ntypedef int kern_return_t;\n',
+    'sys/types.h': (
+        '#pragma once\n'
+        '#include <stdint.h>\n'
+        '#include <stddef.h>\n'
+        'typedef int kern_return_t;\n'
+        '#ifndef _MACH_PORT_T\n'
+        '#define _MACH_PORT_T\n'
+        'typedef uint32_t mach_port_t;\n'
+        '#endif\n'
+    ),
     'sys/proc.h': '#pragma once\ntypedef struct proc *proc_t;\nstatic inline int proc_pid(proc_t) { return 42; }\n',
     'kern/task.h': '#pragma once\ntypedef struct task *task_t;\nstatic inline void *get_bsdtask_info(task_t) { return nullptr; }\n',
     'kern/clock.h': r'''#pragma once
@@ -79,6 +88,7 @@ int PE_current_console(struct PE_Video *info);
 ''',
     'IOKit/IOReturn.h': r'''#pragma once
 #include <stdint.h>
+#include <sys/types.h>
 typedef int IOReturn;
 typedef int32_t SInt32;
 typedef uint32_t UInt32;
@@ -1075,8 +1085,9 @@ def main():
         extra_cpp.write_text(EXTRA_TESTS_CPP)
 
         cflags = [
-            '-std=c++17', '-Wall', '-Wextra', '-Werror', '-O1',
-            '-fsanitize=address,undefined', '-fno-sanitize=vptr',
+            '-std=c++17', '-Wall', '-Wextra', '-Werror',
+            '-Wno-unknown-warning-option', '-Wno-unused-but-set-global',
+            '-O1', '-fsanitize=address,undefined', '-fno-sanitize=vptr',
             '-I', str(inc), '-I', str(ROOT / 'package'), '-I', str(ROOT),
         ]
 
