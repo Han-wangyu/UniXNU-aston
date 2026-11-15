@@ -110,9 +110,14 @@ static void appendProperty(IORegistryEntry *driver,const char *key,const char *l
     native_hid_input_props[used]=0;
 }
 static bool hasDigitizerPair(IORegistryEntry *driver) {
-    OSNumber *page=OSDynamicCast(OSNumber,driver->getProperty("PrimaryUsagePage"));
-    OSNumber *usage=OSDynamicCast(OSNumber,driver->getProperty("PrimaryUsage"));
-    return page && usage && page->unsigned32BitValue()==0x0d && usage->unsigned32BitValue()==4;
+    OSObject *pageObj=driver->copyProperty("PrimaryUsagePage");
+    OSObject *usageObj=driver->copyProperty("PrimaryUsage");
+    OSNumber *page=OSDynamicCast(OSNumber,pageObj);
+    OSNumber *usage=OSDynamicCast(OSNumber,usageObj);
+    const bool ok=page && usage && page->unsigned32BitValue()==0x0d && usage->unsigned32BitValue()==4;
+    OSSafeReleaseNULL(pageObj);
+    OSSafeReleaseNULL(usageObj);
+    return ok;
 }
 static void publishDigitizer(IORegistryEntry *driver) {
     driver->setProperty("Built-In",kOSBooleanTrue);driver->setProperty("DisplayIntegrated",kOSBooleanTrue);

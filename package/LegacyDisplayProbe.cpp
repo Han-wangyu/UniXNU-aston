@@ -115,10 +115,19 @@ bool native_legacy_prepare_scanout(void) {
 __attribute__((noinline)) void native_legacy_display_checkpoint(void) {__asm__ volatile("" ::: "memory");}
 __attribute__((noinline)) void native_legacy_gop_mapping_checkpoint(void) {__asm__ volatile("" ::: "memory");}
 __attribute__((noinline)) void native_legacy_client_checkpoint(void) {__asm__ volatile("" ::: "memory");}
+extern void sheng_backlight_display_power(bool powered) __attribute__((weak_import));
 void native_legacy_pm_observed(unsigned stage,IOReturn status,unsigned long ordinal) {
     native_legacy_pm_stage=stage;native_legacy_pm_status=status;native_legacy_pm_ordinal=(uint32_t)ordinal;
     native_legacy_pm_calls=native_legacy_pm_calls+1;
     if(stage==3)native_legacy_pm_callbacks=native_legacy_pm_callbacks+1;
+    if(stage==4 && status==kIOReturnSuccess && ordinal<=1) {
+        static unsigned lastPowered=1;
+        const unsigned powered=ordinal?1u:0u;
+        if(powered!=lastPowered) {
+            lastPowered=powered;
+            if(sheng_backlight_display_power)sheng_backlight_display_power(powered!=0);
+        }
+    }
 }
 __attribute__((noinline)) void native_legacy_swap_validation_checkpoint(bool,unsigned,const void *,const void *) {__asm__ volatile("" ::: "memory");}
 // Last rejected swap request, copied from the original request layout the validator reads (offsets

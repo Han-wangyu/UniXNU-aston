@@ -36,7 +36,9 @@ IOMemoryMap *gMap;
 volatile uint32_t *gDsi;
 IOLock *gLock;
 bool gDisplayOff;
-unsigned gPanelOffCmd = 1;
+// Default 0: AA551 is AMOLED (zero LED backlight), so page 0 + DCS 0x51 00 00 (DBV = 0) already yields zero-emission black standby
+// without risking High-Speed DCS 0x28/0x29 desync across Pixelworks Iris7P while DPU DSC autorefresh runs. aston-panel-off=1 opts back in.
+unsigned gPanelOffCmd = 0;
 
 uint32_t rd(uint32_t reg) {return gDsi[reg / 4];}
 void wr(uint32_t reg, uint32_t value) {gDsi[reg / 4] = value; __asm__ volatile("dsb sy" ::: "memory");}

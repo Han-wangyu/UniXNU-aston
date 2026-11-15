@@ -65,7 +65,13 @@ Window gGcc, gSe[2];
 volatile uint32_t gIrqStatus[2];
 IOInterruptEventSource *volatile gInbox;
 // The newest brightness asked for: goal << 16 | fade milliseconds, with bit 63 set while the work loop has not taken it.
+// Bit 62 forces a write to the hardware even when software thinks the level is already at goal (used on display wake).
 volatile uint64_t gRequest;
+constexpr uint64_t kRequestPending = 1ull << 63, kRequestForce = 1ull << 62;
+constexpr uint32_t kWakeZeroGuardMs = 300;
+volatile uint32_t gSavedUserLevel = kPanelDefaultLevel;
+volatile bool gDisplayPowered = true;
+volatile uint64_t gLastWakeAbs = 0;
 
 bool mapWindow(Window &w, uint64_t base, uint64_t size) {
     IODeviceMemory *memory = IODeviceMemory::withRange(base, size);
@@ -112,7 +118,7 @@ class ShengBacklight : public IOService {
     IOInterruptEventSource *inbox = nullptr;
     uint32_t level = 0, from = 0, to = 0, target = 0, attachTries = 0;
     uint64_t start = 0, period = 0;
-    bool irqMode = false, published = false;
+    bool irqMode = false, published = false, forceNextWrite = false;
 
     static uint64_t now() {return mach_absolute_time();}
     static uint64_t after(uint32_t ms) {uint64_t delta = 0; nanoseconds_to_absolutetime((uint64_t)ms * NSEC_PER_MSEC, &delta); return now() + delta;}
@@ -213,8 +219,12 @@ class ShengBacklight : public IOService {
         ShengBacklight *self = static_cast<ShengBacklight *>(owner);
         if (!self) return;
         native_backlight_request[2] = native_backlight_request[2] + 1;
-        const uint64_t request = __atomic_exchange_n(&gRequest, 0ull, __ATOMIC_ACQUIRE);
-        if (request >> 63) {native_backlight_request[3] = native_backlight_request[3] + 1; self->beginFade((uint32_t)(request >> 16) & 0xffff, (uint32_t)request & 0xffff);}
+        const uint64_t req = __atomic_exchange_n(&gRequest, 0ull, __ATOMIC_ACQUIRE);
+        if (req & kRequestPending) {
+            native_backlight_request[3] = native_backlight_request[3] + 1;
+            if (req & kRequestForce) self->forceNextWrite = true;
+            self->beginFade((uint32_t)(req >> 16) & 0xffff, (uint32_t)req & 0xffff);
+        }
     }
     static void tickFired(OSObject *owner, IOTimerEventSource *) {
         if (ShengBacklight *self = static_cast<ShengBacklight *>(owner)) self->service();
@@ -253,7 +263,9 @@ class ShengBacklight : public IOService {
         uint32_t next = self->to;
         if (elapsed < self->period)
             next = (uint32_t)((int64_t)self->from + ((int64_t)self->to - (int64_t)self->from) * (int64_t)elapsed / (int64_t)self->period);
-        if (next != self->level) {self->setLevel(next); self->level = next;}
+        const bool force = self->forceNextWrite;
+        self->forceNextWrite = false;
+        if (force || next != self->level) {self->setLevel(next); self->level = next;}
         if (next != self->to) sender->setTimeoutMS(kStepMs);
     }
     // On the work loop: a fade from the level now shown to goal.
@@ -360,6 +372,7 @@ class ShengBacklight : public IOService {
         published = true;
         const int32_t read = native_backlight_stats[3] > 0 ? native_backlight_stats[3] : native_backlight_stats[4];
         level = to = target = read > 0 ? (uint32_t)read : kMaxLevel / 2;
+        if (level > 0) __atomic_store_n(&gSavedUserLevel, level, __ATOMIC_RELEASE);
         // CoreBrightness finds the backlight by backlight-control = true and takes it for the built-in display's only when
         // IOObjectConformsTo(service, "AppleARMBacklight") holds (CBDisplayContaineriOS findBacklight). Only for the built-in display
         // does CoreBrightness start the libEDR server (com.apple.libEDR.Notification) that QuartzCore's IOMFBServer sends to
@@ -443,15 +456,45 @@ public:
             return kIOReturnSuccess;
         }
         bump(1);
+        if (goal > 0) {
+            __atomic_store_n(&gSavedUserLevel, goal, __ATOMIC_RELEASE);
+            publish(goal);
+            if (!__atomic_load_n(&gDisplayPowered, __ATOMIC_ACQUIRE)) return kIOReturnSuccess;
+        } else {
+            if (!__atomic_load_n(&gDisplayPowered, __ATOMIC_ACQUIRE)) return kIOReturnSuccess;
+            const uint64_t wokeAt = __atomic_load_n(&gLastWakeAbs, __ATOMIC_ACQUIRE);
+            if (wokeAt) {
+                uint64_t guardAbs = 0;
+                nanoseconds_to_absolutetime((uint64_t)kWakeZeroGuardMs * NSEC_PER_MSEC, &guardAbs);
+                const uint64_t cur = now();
+                if (cur >= wokeAt && cur - wokeAt < guardAbs) return kIOReturnSuccess;
+            }
+        }
         native_backlight_request[0] = (int32_t)goal;
         native_backlight_request[1] = (int32_t)milliseconds;
         // Handed to the work loop without waiting for it (a runAction here blocks backboardd's brightness thread on the work loop's
         // gate; int-277 got 53 requests in the first 41 s and none after): a newer request replaces one not yet taken. The request timer, not
         // the interrupt source, carries it: int-278 signalled the interrupt source for 345 requests and wrote none.
-        __atomic_store_n(&gRequest, 1ull << 63 | (uint64_t)goal << 16 | milliseconds, __ATOMIC_RELEASE);
+        __atomic_store_n(&gRequest, kRequestPending | (uint64_t)goal << 16 | milliseconds, __ATOMIC_RELEASE);
         request->setTimeoutUS(1);
-        publish(goal);
         return kIOReturnSuccess;
+    }
+    void handleDisplayPower(bool powered) {
+        __atomic_store_n(&gDisplayPowered, powered, __ATOMIC_RELEASE);
+        if (powered) __atomic_store_n(&gLastWakeAbs, now(), __ATOMIC_RELEASE);
+        if (!published || !request) return;
+        uint32_t goal = 0;
+        if (powered) {
+            goal = __atomic_load_n(&gSavedUserLevel, __ATOMIC_ACQUIRE);
+            const uint32_t fallback = gPanel ? kPanelDefaultLevel : (kMaxLevel / 2 ? kMaxLevel / 2 : 1u);
+            if (!goal) goal = fallback;
+            if (goal > kMaxLevel) goal = kMaxLevel;
+        }
+        native_backlight_request[0] = (int32_t)goal;
+        native_backlight_request[1] = 0;
+        __atomic_store_n(&gRequest, kRequestPending | kRequestForce | ((uint64_t)goal << 16), __ATOMIC_RELEASE);
+        request->setTimeoutUS(1);
+        if (goal > 0) publish(goal);
     }
 };
 #if __has_feature(ptrauth_calls)
@@ -471,6 +514,13 @@ OSDefineDefaultStructors(ShengBacklight, IOService)
 OSDefineMetaClassAndStructors(ShengBacklight, IOService)
 #endif
 
+static ShengBacklight *volatile gBacklightInstance = nullptr;
+
+extern "C" void sheng_backlight_display_power(bool powered) {
+    ShengBacklight *backlight = __atomic_load_n(&gBacklightInstance, __ATOMIC_ACQUIRE);
+    if (backlight) backlight->handleDisplayPower(powered);
+}
+
 // sheng-backlight=2 (aston), called by BacklightProbe.cpp once this file's classes are registered: the panel's DCS brightness.
 extern "C" void aston_backlight_start(void) {
     if (!aston_panel_open || !aston_panel_level || aston_panel_open()) {fail(1, -19); return;}
@@ -482,6 +532,7 @@ extern "C" void aston_backlight_start(void) {
         if (backlight) backlight->release();
         fail(3, -19); return;
     }
+    __atomic_store_n(&gBacklightInstance, backlight, __ATOMIC_RELEASE);
     backlight->release();
 }
 
@@ -505,5 +556,6 @@ extern "C" void sheng_backlight_start(void) {
         if (backlight) backlight->release();
         fail(3, -19); return;
     }
+    __atomic_store_n(&gBacklightInstance, backlight, __ATOMIC_RELEASE);
     backlight->release();
 }

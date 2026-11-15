@@ -218,6 +218,7 @@ jobs:
           python3 UniXNU-aston/scripts/check-boot-watchdog-policy.py
           python3 UniXNU-aston/scripts/check-gpu-power-host.py
           python3 UniXNU-aston/scripts/check-aston-display-window.py
+          python3 UniXNU-aston/scripts/check-aston-backlight-pm-host.py
           PYTHONPATH=UniXNU/scripts python3 UniXNU/scripts/test-runtime-inputs.py
       - name: GPU userspace cache
         id: gpu-cache
@@ -281,7 +282,7 @@ jobs:
         # (sheng-rerun-migration=1, aston-migration-rerun.patch) are out of the menu; the kernel still takes their arguments.
         run: |
           python3 UniXNU-aston/scripts/aston-payload-menu.py "$WORK/payload/payload.img" \
-            --variant "xnu-full-panel|iOS full 1264x2780 (unscaled)|!aston-display" \
+            --variant "xnu-402x874|iOS 402x874 window|aston-display=1" \
             --variant "xnu-combined-hid|iOS (combined key/touch HID)|!sheng-touch-split" \
             --variant "xnu-diag|iOS diag (full GPU/CPU/UI logs)|log-gpu=1 log-display=1 log-power=1 log-sys=1 log-audio=1 log-wifi=1 boot-ui-trace=1 cs-profile=1"
       - uses: actions/cache/save@v4
