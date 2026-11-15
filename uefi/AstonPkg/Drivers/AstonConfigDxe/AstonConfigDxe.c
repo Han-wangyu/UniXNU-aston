@@ -33,6 +33,7 @@
 #define ASTON_SHNGROOT_MAX_ENTRIES    31U
 #define ASTON_MAX_PAYLOAD_BYTES       (256ULL * 1024ULL * 1024ULL)
 #define ASTON_READ_CHUNK_BYTES        (4U * 1024U * 1024U)
+#define ASTON_PROBE_REPORT_REL_LBA    4194304ULL
 
 STATIC CONST EFI_GUID  mUniXnuLoaderProtocolGuid = {
   0x0f0a492e, 0x5a6a, 0x49f6, { 0xa1, 0xbf, 0x74, 0x3c, 0x87, 0xab, 0x1c, 0xfe }
@@ -88,9 +89,10 @@ typedef struct {
   UINTN                  Size;
 } ASTON_RAM_BLOCK_DEV;
 
-STATIC ASTON_RAM_BLOCK_DEV  *mRamDisk  = NULL;
-STATIC EFI_HANDLE           mRamHandle = NULL;
-STATIC BOOLEAN              mPublished = FALSE;
+STATIC ASTON_RAM_BLOCK_DEV  *mRamDisk         = NULL;
+STATIC EFI_HANDLE           mRamHandle        = NULL;
+STATIC BOOLEAN              mPublished        = FALSE;
+STATIC VOID                 *mBlockIoNotifyReg = NULL;
 
 STATIC
 EFI_STATUS
@@ -782,12 +784,65 @@ RunUefiHardwareProbeAndReboot (
     );
 
   if (!EFI_ERROR (UnixnuStatus)) {
-    Unixnu.BlockIo->WriteBlocks (Unixnu.BlockIo, Unixnu.MediaId, Unixnu.StartingLba, sizeof (Report), Report);
-    Unixnu.BlockIo->FlushBlocks (Unixnu.BlockIo);
+    UINT8       *Head;
+    BOOLEAN     HasManifest;
+    EFI_STATUS  ReadStatus;
+
+    HasManifest = FALSE;
+    if (Unixnu.BlockSize > 0) {
+      Head = AllocateZeroPool (Unixnu.BlockSize);
+      if (Head != NULL) {
+        ReadStatus = Unixnu.BlockIo->ReadBlocks (
+                                       Unixnu.BlockIo,
+                                       Unixnu.MediaId,
+                                       Unixnu.StartingLba,
+                                       Unixnu.BlockSize,
+                                       Head
+                                       );
+        if (!EFI_ERROR (ReadStatus) && (CompareMem (Head, ASTON_SHNGROOT_MAGIC, 8) == 0)) {
+          HasManifest = TRUE;
+        }
+
+        FreePool (Head);
+      }
+    }
+
+    DEBUG ((
+      DEBUG_INFO,
+      "AstonProbe: unixnu LBA0 HasManifest=%u\n",
+      HasManifest ? 1U : 0U
+      ));
+
+    if ((Unixnu.BlockSize > 0) &&
+        (UnixnuBlocks > ASTON_PROBE_REPORT_REL_LBA) &&
+        (((UnixnuBlocks - ASTON_PROBE_REPORT_REL_LBA) * (UINT64)Unixnu.BlockSize) >= (UINT64)sizeof (Report)))
+    {
+      Unixnu.BlockIo->WriteBlocks (
+                        Unixnu.BlockIo,
+                        Unixnu.MediaId,
+                        Unixnu.StartingLba + ASTON_PROBE_REPORT_REL_LBA,
+                        sizeof (Report),
+                        Report
+                        );
+      Unixnu.BlockIo->FlushBlocks (Unixnu.BlockIo);
+    }
   }
 
   gBS->Stall (1500000);
   AstonRebootWithReason (ASTON_REBOOT_BOOTLOADER);
+}
+
+STATIC
+VOID
+EFIAPI
+OnBlockIoInstalled (
+  IN EFI_EVENT  Event,
+  IN VOID       *Context
+  )
+{
+  if ((FixedPcdGet8 (PcdAstonProbeMode) == 0) && !mPublished) {
+    TryPublishUnixnuPayload ();
+  }
 }
 
 STATIC
@@ -799,6 +854,7 @@ OnReadyToBoot (
   )
 {
   gBS->CloseEvent (Event);
+  AstonConnectAllControllers ();
 
   if (FixedPcdGet8 (PcdAstonProbeMode) != 0) {
     RunUefiHardwareProbeAndReboot ();
@@ -820,10 +876,28 @@ AstonConfigDxeEntry (
   IN EFI_SYSTEM_TABLE  *SystemTable
   )
 {
-  EFI_EVENT  ReadyEvent;
+  EFI_EVENT   ReadyEvent;
+  EFI_EVENT   BlockIoEvent;
+  EFI_STATUS  Status;
 
   if (FixedPcdGet8 (PcdAstonProbeMode) == 0) {
     TryPublishUnixnuPayload ();
+    if (!mPublished) {
+      Status = gBS->CreateEvent (
+                      EVT_NOTIFY_SIGNAL,
+                      TPL_CALLBACK,
+                      OnBlockIoInstalled,
+                      NULL,
+                      &BlockIoEvent
+                      );
+      if (!EFI_ERROR (Status)) {
+        gBS->RegisterProtocolNotify (
+               &gEfiBlockIoProtocolGuid,
+               BlockIoEvent,
+               &mBlockIoNotifyReg
+               );
+      }
+    }
   }
 
   return gBS->CreateEventEx (
