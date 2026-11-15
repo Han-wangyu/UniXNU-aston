@@ -13,15 +13,23 @@ jobs:
           - name: aston-uefi-simplefb-probe
             custom_display: "0"
             probe_mode: "1"
+            build_target: "DEBUG"
           - name: aston-uefi-displaydxe-probe
             custom_display: "1"
             probe_mode: "1"
+            build_target: "DEBUG"
           - name: aston-uefi-simplefb-prod
             custom_display: "0"
             probe_mode: "0"
+            build_target: "RELEASE"
           - name: aston-uefi-displaydxe-prod
             custom_display: "1"
             probe_mode: "0"
+            build_target: "RELEASE"
+          - name: aston-uefi-simplefb-debugprod
+            custom_display: "0"
+            probe_mode: "0"
+            build_target: "DEBUG"
     steps:
       - name: Checkout UniXNU-aston
         uses: actions/checkout@v4
@@ -58,16 +66,17 @@ jobs:
           ASTON_PROBE_MODE: ${{ matrix.probe_mode }}
         run: |
           cd Mu-Silicium
-          python3 Platforms/OnePlus/astonPkg/DeviceBuild.py --setup -t DEBUG
-          python3 Platforms/OnePlus/astonPkg/DeviceBuild.py --update -t DEBUG
+          python3 Platforms/OnePlus/astonPkg/DeviceBuild.py --setup -t ${{ matrix.build_target }}
+          python3 Platforms/OnePlus/astonPkg/DeviceBuild.py --update -t ${{ matrix.build_target }}
           mkdir -p Build
           python3 ../UniXNU-aston/uefi/apply-aston-uefi.py \
             --mu . \
             --unixnu ../UniXNU \
             --aston ../UniXNU-aston
-          python3 ./build_uefi.py -d aston -r DEBUG -m 0
+          python3 ./build_uefi.py -d aston -r ${{ matrix.build_target }} -m 0
           python3 ../UniXNU-aston/uefi/package-aston-boot.py \
             --mu . \
+            --target "${{ matrix.build_target }}" \
             --avbtool ../avb/avbtool.py \
             --key ../avb/test/data/testkey_rsa4096.pem \
             --name "${{ matrix.name }}" \
