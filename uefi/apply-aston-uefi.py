@@ -77,7 +77,11 @@ def patch_aston_dsc(path: Path) -> None:
         "[PcdsFixedAtBuild]",
         "[PcdsFixedAtBuild]\n"
         "  gEfiMdePkgTokenSpaceGuid.PcdPlatformBootTimeOut|0\n"
-        "  gAstonPkgTokenSpaceGuid.PcdAstonProbeMode|$(ASTON_PROBE_MODE)",
+        "  gAstonPkgTokenSpaceGuid.PcdAstonProbeMode|$(ASTON_PROBE_MODE)\n"
+        "  gSiliciumPkgTokenSpaceGuid.PcdFrameBufferDelay|0\n"
+        "!if $(TARGET) == DEBUG\n"
+        "  gEfiMdePkgTokenSpaceGuid.PcdDebugPropertyMask|0x07\n"
+        "!endif",
         "gAstonPkgTokenSpaceGuid.PcdAstonProbeMode",
         f"{path} (PcdsFixedAtBuild)",
     )
@@ -208,6 +212,166 @@ def patch_gic_v3(path: Path) -> None:
     path.write_bytes(updated.encode("utf-8"))
 
 
+def patch_psci_reset_lib(path: Path) -> None:
+    raw = path.read_bytes()
+    newline = "\r\n" if b"\r\n" in raw else "\n"
+    text = raw.decode("utf-8")
+
+    old_cold = newline.join(
+        [
+            "VOID",
+            "EFIAPI",
+            "ResetCold (",
+            "  VOID",
+            "  )",
+            "{",
+            "  ARM_MONITOR_ARGS  Args;",
+            "",
+            "  // Send a PSCI 0.2 SYSTEM_RESET command",
+            "  Args.Arg0 = ARM_SMC_ID_PSCI_SYSTEM_RESET;",
+            "",
+            "  ArmMonitorCall (&Args);",
+            "}",
+        ]
+    )
+    new_cold = newline.join(
+        [
+            "STATIC",
+            "VOID",
+            "ZeroMonitorArgs (",
+            "  OUT ARM_MONITOR_ARGS  *Args",
+            "  )",
+            "{",
+            "  UINTN  Index;",
+            "",
+            "  for (Index = 0; Index < (sizeof (*Args) / sizeof (UINTN)); Index++) {",
+            "    ((UINTN *)Args)[Index] = 0;",
+            "  }",
+            "}",
+            "",
+            "VOID",
+            "EFIAPI",
+            "ResetCold (",
+            "  VOID",
+            "  )",
+            "{",
+            "  ARM_MONITOR_ARGS  Args;",
+            "",
+            "  // Send a PSCI 0.2 SYSTEM_RESET command with zeroed register arguments.",
+            "  ZeroMonitorArgs (&Args);",
+            "  Args.Arg0 = ARM_SMC_ID_PSCI_SYSTEM_RESET;",
+            "",
+            "  ArmMonitorCall (&Args);",
+            "}",
+        ]
+    )
+    text = replace_once(
+        text,
+        old_cold,
+        new_cold,
+        f"ZeroMonitorArgs (&Args);{newline}  Args.Arg0 = ARM_SMC_ID_PSCI_SYSTEM_RESET;",
+        f"{path} (ResetCold)",
+    )
+
+    old_warm = newline.join(
+        [
+            "VOID",
+            "EFIAPI",
+            "ResetWarm (",
+            "  VOID",
+            "  )",
+            "{",
+            "  ARM_MONITOR_ARGS  Args;",
+            "",
+            "  Args.Arg0 = ARM_SMC_ID_PSCI_FEATURES;",
+            "  Args.Arg1 = ARM_SMC_ID_PSCI_SYSTEM_RESET2_AARCH64;",
+            "",
+            "  // Is SYSTEM_RESET2 supported?",
+            "  ArmMonitorCall (&Args);",
+            "  if (Args.Arg0 == ARM_SMC_PSCI_RET_SUCCESS) {",
+            "    // Send PSCI SYSTEM_RESET2 command",
+            "    Args.Arg0 = ARM_SMC_ID_PSCI_SYSTEM_RESET2_AARCH64;",
+            "    Args.Arg1 = 0; // Reset type",
+            "    // cookie does not matter with reset type 0",
+            "",
+            "    ArmMonitorCall (&Args);",
+            "  } else {",
+            "    // Map a warm reset into a cold reset",
+            "    DEBUG ((",
+            "      DEBUG_INFO,",
+            '      "Warm reboot not supported by platform, issuing cold reboot\\n"',
+            "      ));",
+            "    ResetCold ();",
+            "  }",
+            "}",
+        ]
+    )
+    new_warm = newline.join(
+        [
+            "VOID",
+            "EFIAPI",
+            "ResetWarm (",
+            "  VOID",
+            "  )",
+            "{",
+            "  // Qualcomm SM8550 TZ rejects PSCI SYSTEM_RESET2(0); always issue cold reset.",
+            "  ResetCold ();",
+            "}",
+        ]
+    )
+    text = replace_once(
+        text,
+        old_warm,
+        new_warm,
+        "Qualcomm SM8550 TZ rejects PSCI SYSTEM_RESET2",
+        f"{path} (ResetWarm)",
+    )
+
+    old_shutdown = newline.join(
+        [
+            "VOID",
+            "EFIAPI",
+            "ResetShutdown (",
+            "  VOID",
+            "  )",
+            "{",
+            "  ARM_MONITOR_ARGS  Args;",
+            "",
+            "  // Send a PSCI 0.2 SYSTEM_RESET command",
+            "  Args.Arg0 = ARM_SMC_ID_PSCI_SYSTEM_OFF;",
+            "",
+            "  ArmMonitorCall (&Args);",
+            "}",
+        ]
+    )
+    new_shutdown = newline.join(
+        [
+            "VOID",
+            "EFIAPI",
+            "ResetShutdown (",
+            "  VOID",
+            "  )",
+            "{",
+            "  ARM_MONITOR_ARGS  Args;",
+            "",
+            "  // Send a PSCI 0.2 SYSTEM_OFF command with zeroed register arguments.",
+            "  ZeroMonitorArgs (&Args);",
+            "  Args.Arg0 = ARM_SMC_ID_PSCI_SYSTEM_OFF;",
+            "",
+            "  ArmMonitorCall (&Args);",
+            "}",
+        ]
+    )
+    text = replace_once(
+        text,
+        old_shutdown,
+        new_shutdown,
+        f"ZeroMonitorArgs (&Args);{newline}  Args.Arg0 = ARM_SMC_ID_PSCI_SYSTEM_OFF;",
+        f"{path} (ResetShutdown)",
+    )
+    path.write_bytes(text.encode("utf-8"))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mu", required=True, type=Path, help="Path to Mu-Silicium checkout")
@@ -252,6 +416,7 @@ def main() -> None:
     patch_aston_fdf(mu / "Platforms" / "OnePlus" / "astonPkg" / "aston.fdf")
     patch_aston_memory_map(mu / "Platforms" / "OnePlus" / "astonPkg" / "Library" / "MemoryMapLib" / "MemoryMapLib.c")
     patch_gic_v3(mu / "Mu_Basecore" / "ArmPkg" / "Drivers" / "ArmGicDxe" / "GicV3" / "ArmGicV3Dxe.c")
+    patch_psci_reset_lib(mu / "Mu_Basecore" / "ArmPkg" / "Library" / "ArmPsciResetSystemLib" / "ArmPsciResetSystemLib.c")
 
     print(
         f"Applied Aston UniXNU UEFI integration into {mu} "
