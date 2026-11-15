@@ -82,6 +82,18 @@ jobs:
           ref: 6b3d90b79e191e08171bfedd3980234a7e49d340
           path: Mu-Silicium
           sparse-checkout: Silicon/Silicium/SiliciumPkg/Library/FrameBufferSerialPortLib
+      - name: tools cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.rustup
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/Library/Caches/pip
+            ~/Library/Caches/Homebrew
+          key: aston-tools-macos26-rust1.98-v1
       - name: tools
         env:
           GH_TOKEN: ${{ github.token }}
@@ -207,6 +219,30 @@ jobs:
           python3 UniXNU-aston/scripts/check-gpu-power-host.py
           python3 UniXNU-aston/scripts/check-aston-display-window.py
           PYTHONPATH=UniXNU/scripts python3 UniXNU/scripts/test-runtime-inputs.py
+      - name: GPU userspace cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.WORK }}/tree/.cache/mesa-work
+            ${{ env.WORK }}/tree/.cache/gpu-reference
+            ${{ env.WORK }}/tree/build/mesa-tu-ios27
+            ${{ env.WORK }}/tree/build/mesa-tu-ios27.cross
+            ${{ env.WORK }}/tree/build/m2v-target
+            ${{ env.WORK }}/tree/build/adreno-metal-bridge
+          key: aston-ios27-gpu-v1-${{ hashFiles('UniXNU/scripts/data/adreno-compiler-inputs.json', 'UniXNU/scripts/data/gpu-metal-vulkan-inputs.json', 'UniXNU/scripts/build-turnip-darwin.py', 'UniXNU/scripts/build-adreno-metal-bridge.py', 'UniXNU/drivers/AdrenoMetal/**', 'UniXNU-aston/scripts/fix-upstream-mesa-patch.py', 'UniXNU-aston/unixnu-patches/**') }}
+      - name: XNU reference and feeds cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            UniXNU/out/feeds
+            ${{ env.WORK }}/tree/.cache/fakeroot
+            ${{ env.WORK }}/tree/build/corecrypto-2023
+            ${{ env.WORK }}/tree/build/libpthread-kernel
+            ${{ env.WORK }}/tree/build/xnu/fileset-reference/mach.release.bcm2837.unstripped.noctf
+            ${{ env.WORK }}/tree/build/xnu/fileset-reference/mach.release.bcm2837.unstripped.json
+          key: aston-ios27-xnu-ref-v1-${{ hashFiles('UniXNU-aston/patches/xnu-12377/**', 'UniXNU-aston/unixnu-patches/**', 'UniXNU/scripts/build-fileset-release-reference.py', 'UniXNU/scripts/build-xnu-4k-baseline.sh') }}
+          restore-keys: |
+            aston-ios27-xnu-ref-v1-
       - name: kernel and payload
         working-directory: UniXNU
         env:
@@ -241,8 +277,8 @@ jobs:
         # (sheng-rerun-migration=1, aston-migration-rerun.patch) are out of the menu; the kernel still takes their arguments.
         run: |
           python3 UniXNU-aston/scripts/aston-payload-menu.py "$WORK/payload/payload.img" \
-            --variant "xnu-402x874|iOS 402x874 (native window)|aston-display=1" \
-            --variant "xnu-split-hid|iOS (isolated key/touch HID)|sheng-touch-split=1" \
+            --variant "xnu-full-panel|iOS full 1264x2780 (unscaled)|!aston-display" \
+            --variant "xnu-combined-hid|iOS (combined key/touch HID)|!sheng-touch-split" \
             --variant "xnu-diag|iOS diag (full GPU/CPU/UI logs)|log-gpu=1 log-display=1 log-power=1 log-sys=1 log-audio=1 log-wifi=1 boot-ui-trace=1 cs-profile=1"
       - uses: actions/cache/save@v4
         if: always() && steps.data-cache.outputs.cache-hit != 'true' && hashFiles('UniXNU/out/aston/ios-27.0.1-24A446/aston_ios27/runtime/data.dbr') != ''

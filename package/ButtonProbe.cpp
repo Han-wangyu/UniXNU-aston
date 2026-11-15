@@ -11,7 +11,9 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IODeviceMemory.h>
+#include <kern/clock.h>
 #include <kern/thread.h>
+#include <mach/mach_time.h>
 #include <pexpert/pexpert.h>
 extern "C" {
 #include "BootResetCore.h"
@@ -121,6 +123,7 @@ void buttonsIrq(void *) {
 // gpio-keys entry on PM8550 GPIO 6 reports KEY_VOLUMEDOWN (kalama-mtp.dtsi, oneplus/sm8550_v_15.0.0_ace_3), as on the OnePlus 13T.
 // sheng-buttons-swap=0 restores the reference board's assignment.
 unsigned gVolumeSwap = 1;
+unsigned gHoldMs = 80;
 uint32_t pressed() {
     uint8_t pon = 0, gpio = 0xff;
     uint32_t mask = 0;
@@ -136,6 +139,8 @@ uint32_t pressed() {
 
 bool setup() {
     PE_parse_boot_argn("sheng-buttons-swap", &gVolumeSwap, sizeof gVolumeSwap);
+    PE_parse_boot_argn("sheng-buttons-hold-ms", &gHoldMs, sizeof gHoldMs);
+    if (gHoldMs > 500) gHoldMs = 500;
     gArb.ee = 0;
     if (!mapWindow(gCore, kCore, 0x3000) || !mapWindow(gCnfg, kCnfg, 0x4000) || !mapWindow(gIntr, kIntr, 0x1000) || !mapWindow(gPdc, kPdc, 0x2000)) {
         fail(1, -12); return false;
@@ -179,16 +184,37 @@ bool setup() {
 void buttonsThread(void *, wait_result_t) {
     thread_set_thread_name(current_thread(), "sheng-buttons");
     if (!setup()) return;
+    uint64_t holdAbs = 0;
+    nanoseconds_to_absolutetime((uint64_t)gHoldMs * 1000000ull, &holdAbs);
+    uint64_t holdUntil = 0;
     uint32_t seen = gEvents, last = 0;
     for (;;) {
-        const uint32_t mask = pressed();
+        const uint32_t rawMask = pressed();
+        uint32_t mask = rawMask;
+        uint32_t remainingUs = 0;
+        if (rawMask != 0) {
+            if (holdAbs && (rawMask & ~last)) holdUntil = mach_absolute_time() + holdAbs;
+        } else if (last != 0 && holdUntil != 0) {
+            const uint64_t now = mach_absolute_time();
+            if (now < holdUntil) {
+                uint64_t remNs = 0;
+                absolutetime_to_nanoseconds(holdUntil - now, &remNs);
+                const uint64_t us = (remNs + 999ull) / 1000ull;
+                remainingUs = us ? (uint32_t)us : 1u;
+                mask = last;
+            } else {
+                holdUntil = 0;
+            }
+        }
         if (mask != last) {
             last = mask;
+            if (mask == 0) holdUntil = 0;
             native_buttons_stats[3] = (int32_t)mask;
             void (*sink)(void *, uint32_t) = __atomic_load_n(&gSink, __ATOMIC_ACQUIRE);
             if (sink) {sink(gSinkContext, mask); native_buttons_stats[2] = native_buttons_stats[2] + 1;}
         }
-        assert_wait((event_t)&gEvents, THREAD_UNINT);
+        if (remainingUs) assert_wait_timeout((event_t)&gEvents, THREAD_UNINT, remainingUs, NSEC_PER_USEC);
+        else assert_wait((event_t)&gEvents, THREAD_UNINT);
         if (gEvents != seen) clear_wait(current_thread(), THREAD_AWAKENED);
         else thread_block(THREAD_CONTINUE_NULL);
         seen = gEvents;

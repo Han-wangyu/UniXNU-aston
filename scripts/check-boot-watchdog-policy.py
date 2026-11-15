@@ -31,7 +31,7 @@ struct write_args {int fd;user_addr_t cbuf;size_t nbyte;};
 struct fchown_args {int fd,uid,gid;};struct fchmod_args {int fd,mode;};
 struct unlink_args {user_addr_t path;};struct fsync_args {int fd;};struct fstat64_args {int fd;user_addr_t ub;};struct close_args {int fd;};
 static char jobs[200];static int enabled,calls,opens,closes,md_error,open_error,short_write,chown_error,bad_owner,close_error,marker_exists;
-static unsigned char written_data[3072];static size_t written_size;
+static unsigned char written_data[4096];static size_t written_size;
 static int setup_arg,data_reset_arg,reset_arg,lite_arg,unlink_error,unlinks;static char unlinked[2][128];
 static int PE_parse_boot_argn(const char *key,void *out,int n){if(!strcmp(key,"sheng-lite")){assert(n==4);memcpy(out,&lite_arg,4);return lite_arg!=0;}if(!strcmp(key,"sheng-setup")){assert(n==4);memcpy(out,&setup_arg,4);return setup_arg!=0;}if(!strcmp(key,"data-reset")){assert(n==4);memcpy(out,&data_reset_arg,4);return data_reset_arg!=0;}if(!strcmp(key,"sheng-data-reset")){assert(n==4);memcpy(out,&reset_arg,4);return reset_arg!=0;}if(!strcmp(key,"sheng-disable-jobs")){assert(n==200);memcpy(out,jobs,200);return jobs[0]!=0;}assert(!strcmp(key,"sheng-disable-watchdogd")&&n==4);memcpy(out,&enabled,4);return enabled!=0;}
 static int copyout(const void *s,uintptr_t d,size_t n){++calls;memcpy((void *)d,s,n);return 0;}
@@ -67,7 +67,7 @@ int main(void){
  reset();close_error=EIO;assert(run()==EIO&&closes==1&&opens==1);
  reset();marker_exists=1;assert(!run()&&opens==2&&closes==1);
  /* sheng-lite=1 adds the built-in jobs, with or without other options. */
- reset();enabled=0;lite_arg=1;assert(!run()&&strstr((char*)written_data,"<key>com.apple.photoanalysisd</key><true/>")&&strstr((char*)written_data,"<key>com.apple.identityservicesd</key><true/>")&&!strstr((char*)written_data,"watchdogd")&&written_size<sizeof(written_data));
+ reset();enabled=0;lite_arg=1;assert(!run()&&strstr((char*)written_data,"<key>com.apple.photoanalysisd</key><true/>")&&strstr((char*)written_data,"<key>com.apple.identityservicesd</key><true/>")&&strstr((char*)written_data,"<key>com.apple.aonsensed</key><true/>")&&strstr((char*)written_data,"<key>com.apple.filesystems.fskitd</key><true/>")&&strstr((char*)written_data,"<key>com.apple.sosd</key><true/>")&&strstr((char*)written_data,"<key>com.apple.spaceattributiond</key><true/>")&&!strstr((char*)written_data,"watchdogd")&&written_size<sizeof(written_data));
  reset();lite_arg=1;strcpy(jobs,"com.apple.locationd");assert(!run()&&strstr((char*)written_data,"watchdogd")&&strstr((char*)written_data,"com.apple.eyereliefd"));
  /* Compare the complete sch3 and sch4 policy bytes, including the default camera job. */
  reset();lite_arg=1;strcpy(jobs,"com.apple.cameracaptured");assert(!run());

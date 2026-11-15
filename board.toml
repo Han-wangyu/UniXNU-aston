@@ -140,6 +140,7 @@ kernel_args = [
   # entitlement"; iPadOS boot 6, DMLastMigrationResults success = false).
   # sheng-disable-watchdogd=1 and sheng-lite=1 are compiled into PE_builtin_boot_args[] (package/BootWatchdogPolicy.c).
   "no-lc=1", "vsync=60", "vsync-fixed=1",
+  "sheng-touch-split=1", "aston-display=1",
 ]
 
 [payload.runtime]
@@ -171,7 +172,7 @@ wifi_bin_prefix = "wifi-bin"
 # also turns on Enhanced APFS in the APFS kext (new volume format, volume fixups at mount, metadata crypto), so the board does not
 # set it; the merged cache drops the requirement for this job instead (unixnu-patches/0004). Boot 9: "Service cannot be loaded on
 # this hardware", every lookup of com.apple.spaceattributiond failed and Settings read Zero KB.
-launchd_job_device_tree = ["com.apple.spaceattributiond"]
+launchd_job_device_tree = []
 
 [payload.runtime.launchd_job_environment."com.apple.iconservices.iconservicesagent"]
 FORCE_SOFTWARE_RENDERER = "0"

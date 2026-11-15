@@ -1,0 +1,44 @@
+diff --git a/osfmk/kern/host.c b/osfmk/kern/host.c
+index 891abed..8eff4e7 100644
+--- a/osfmk/kern/host.c
++++ b/osfmk/kern/host.c
+@@ -815,8 +815,11 @@ out:
+ 	return rate_limited;
+ }
+ 
++#define ASTON_HOST_VM_INFO64_IOS27_COUNT ((mach_msg_type_number_t)104)
+ _Static_assert(HOST_VM_INFO64_COUNT <= HOST_INFO_MAX,
+     "vm_statistics64_data_t exceeds maximum host_info size");
++_Static_assert(ASTON_HOST_VM_INFO64_IOS27_COUNT <= HOST_INFO_MAX,
++    "aston iOS 27 vm_statistics64_data_t exceeds maximum host_info size");
+ 
+ kern_return_t
+ vm_stats(void *info, unsigned int *count)
+@@ -828,7 +831,7 @@ vm_stats(void *info, unsigned int *count)
+ 	natural_t speculative_count = vm_page_speculative_count;
+ 	natural_t throttled_count = vm_page_throttled_count;
+ 
+-	if (*count > HOST_VM_INFO64_COUNT) {
++	if (*count > ASTON_HOST_VM_INFO64_IOS27_COUNT) {
+ 		vm_log_error("host_statistics64() count is larger than expected "
+ 		    "(actual:%u > HOST_VM_INFO64_COUNT:%u). This is most likely a bug in "
+ 		    "%s [%d] and is likely to result in memory corruption. The buffer count "
+@@ -964,7 +967,17 @@ vm_stats(void *info, unsigned int *count)
+ 	stat->total_tagged_pages = 0;
+ #endif /* HAS_MTE */
+ 
+-	*count = HOST_VM_INFO64_REV3_COUNT;
++	if (original_count > HOST_VM_INFO64_COUNT) {
++		const mach_msg_type_number_t ret_count = original_count < ASTON_HOST_VM_INFO64_IOS27_COUNT ?
++		    original_count : ASTON_HOST_VM_INFO64_IOS27_COUNT;
++		integer_t *out_words = (integer_t *)info;
++		for (mach_msg_type_number_t i = HOST_VM_INFO64_COUNT; i < ret_count; i++) {
++			out_words[i] = 0;
++		}
++		*count = ret_count;
++	} else {
++		*count = HOST_VM_INFO64_REV3_COUNT;
++	}
+ 	return KERN_SUCCESS;
+ }
+ 

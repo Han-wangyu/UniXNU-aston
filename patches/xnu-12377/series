@@ -24,3 +24,4 @@ aston-migration-rerun.patch
 aston-iouserserver-compact-dispatch.patch
 aston-interface-namer-overlay.patch
 aston-display-window.patch
+aston-ios27-host-vm-info64.patch

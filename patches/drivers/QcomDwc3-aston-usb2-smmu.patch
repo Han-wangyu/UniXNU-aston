@@ -1,0 +1,36 @@
+diff --git a/QcomDwc3.cpp b/QcomDwc3.cpp
+index 806fbe3..71a6c82 100644
+--- a/QcomDwc3.cpp
++++ b/QcomDwc3.cpp
+@@ -334,6 +334,8 @@ bool qmpInit(bool reverse) {
+ }
+ // The USB 3 path, or false for USB 2 only with the UTMI clock in place of the PIPE clock (a USB 2 cable still works on the former).
+ bool superSpeedInit() {
++    unsigned ss = 0;
++    if (!PE_parse_boot_argn("sheng-usb-ss", &ss, sizeof(ss)) || ss != 1) return false;
+     Region tlmm = {};
+     if (!mapRegion(tlmm, 0xf100000, 0x10000)) return false;
+     const bool reverse = tlmm.va[(11 * 0x1000 + 4) / 4] & 1u;                   // orientation-gpios, tlmm 11, active high
+@@ -365,8 +367,13 @@ bool smmuIdentity() {
+         const uint32_t smr = gSmmu.va[(0x800 + 4 * i) / 4];
+         if (!(smr & 0x80000000u)) {if (slot == 0xffffffffu) slot = i; continue;}
+         const uint32_t s2cr = gSmmu.va[(0xc00 + 4 * i) / 4];
+-        if (((smr ^ kSid) & 0xffff & ~((smr >> 16) & 0x7fff)) == 0) {IOLog("qcom-dwc3: stream already mapped %x %x\n", smr, s2cr); return false;}
+         if (((s2cr >> 16) & 3) == 0) used[(s2cr & 127) / 64] |= 1ull << ((s2cr & 127) % 64);
++        if (((smr ^ kSid) & 0xffff & ~((smr >> 16) & 0x7fff)) == 0) {
++            // Take over an exact single-stream firmware mapping on its existing SMR slot so USB never multi-matches in SMMUv2.
++            if (smr == (0x80000000u | kSid)) {slot = i; continue;}
++            IOLog("qcom-dwc3: stream already mapped %x %x\n", smr, s2cr);
++            return false;
++        }
+     }
+     if (slot == 0xffffffffu) return false;
+     // The last bank is the shared bypass bank. Take the highest bank no stream uses and no firmware left enabled.
+@@ -684,6 +691,7 @@ void setCoreRole(int role) {
+ }
+ // qmp_combo_typec_switch_set and ps5169: the lanes follow the plug. The GPIO means something once a cable is in.
+ void followOrientation() {
++    if (!gSuperSpeed) return;
+     Region tlmm = {};
+     if (!mapRegion(tlmm, 0xf100000, 0x10000)) return;
+     const uint32_t reverse = tlmm.va[(11 * 0x1000 + 4) / 4] & 1u;

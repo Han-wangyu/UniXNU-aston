@@ -18,6 +18,7 @@
 #include <IOKit/IODeviceMemory.h>
 #include <kern/clock.h>
 #include <mach/mach_time.h>
+#include <pexpert/pexpert.h>
 
 // [0] stage (1 mapped, negative: the step that failed), [1] HW_VERSION, [2] DSI_CTRL, [3] COMMAND_MODE_DMA_CTRL, [4] TRIG_CTRL, [5] INT_CTRL,
 // [6] commands sent, [7] commands that timed out, [8] last command's time (us), [9] last level written, [10] the longest command (us)
@@ -34,6 +35,8 @@ constexpr uint32_t kMaxLevel = 4094, kTimeoutUs = 50000;
 IOMemoryMap *gMap;
 volatile uint32_t *gDsi;
 IOLock *gLock;
+bool gDisplayOff;
+unsigned gPanelOffCmd = 1;
 
 uint32_t rd(uint32_t reg) {return gDsi[reg / 4];}
 void wr(uint32_t reg, uint32_t value) {gDsi[reg / 4] = value; __asm__ volatile("dsb sy" ::: "memory");}
@@ -77,6 +80,8 @@ int sendPacket(const uint32_t *words, unsigned count) {
 // DCS long write (data type 0x39) header: word count in bits 15:0, flags in the top byte (bit 31 last packet, bit 30 long packet). Each
 // packet here is a DMA transfer of its own, so each is the last one.
 uint32_t longHeader(unsigned bytes) {return 0xc0000000u | (0x39u << 16) | bytes;}
+// DCS short write (data type 0x05): single command byte, no parameters.
+uint32_t shortHeader(uint8_t cmd) {return 0x80000000u | (0x05u << 16) | cmd;}
 }  // namespace
 
 extern "C" int aston_panel_open(void) {
@@ -96,6 +101,8 @@ extern "C" int aston_panel_open(void) {
     aston_panel_stats[5] = (int32_t)rd(kIntCtrl);
     // The controller the boot loader left running: enabled (bit 0). Off, the commands would go nowhere.
     if (!(rd(kCtrl) & 1u)) {gDsi = nullptr; aston_panel_stats[0] = -2; return -1;}
+    PE_parse_boot_argn("aston-panel-off", &gPanelOffCmd, sizeof(gPanelOffCmd));
+    gDisplayOff = false;
     aston_panel_stats[0] = 1;
     return 0;
 }
@@ -107,8 +114,19 @@ extern "C" int aston_panel_level(uint32_t level) {
     const uint32_t page[2] = {longHeader(4), 0xffu | 0x08u << 8 | 0x38u << 16 | 0x00u << 24};
     const uint32_t brightness[2] = {longHeader(3), 0x51u | ((level >> 8) & 0xffu) << 8 | (level & 0xffu) << 16 | 0xffu << 24};
     IOLockLock(gLock);
-    int rc = sendPacket(page, 2);
+    int rc = 0;
+    if (level > 0 && gDisplayOff) {
+        const uint32_t on = shortHeader(0x29);
+        rc = sendPacket(&on, 1);
+        if (!rc) gDisplayOff = false;
+    }
+    if (!rc) rc = sendPacket(page, 2);
     if (!rc) rc = sendPacket(brightness, 2);
+    if (!rc && level == 0 && gPanelOffCmd && !gDisplayOff) {
+        const uint32_t off = shortHeader(0x28);
+        rc = sendPacket(&off, 1);
+        if (!rc) gDisplayOff = true;
+    }
     IOLockUnlock(gLock);
     if (!rc) aston_panel_stats[9] = (int32_t)level;
     return rc;

@@ -377,6 +377,7 @@ int preemptWrite(void *, uint32_t reg, uint32_t value) {
 // The CP's preemption, as the board sees it: [0] set up (0 yes), [1] CP_SW interrupts seen, [2] the last such RBBM_INT_0_STATUS word.
 extern "C" {volatile uint32_t native_gpu_preempt[8];}
 extern "C" bool native_adreno_preempt_irq() __attribute__((weak));   // NativeAdrenoPublish.cpp
+extern "C" void native_adreno_gpu_interrupt(uint32_t status) __attribute__((weak));   // NativeAdrenoPublish.cpp
 // The ring, memptrs and lists are Normal non-cacheable on both sides (GPU PTE MAIR 0, CPU write-combine): no cache
 // maintenance, only ordering.
 int ringPublish(void *, const volatile uint32_t *, size_t) {__asm__ volatile("dsb sy" ::: "memory"); return 0;}
@@ -722,6 +723,7 @@ void gpuIrq(void *) {
         // wake a waiter and use the interrupted thread's turnstile state.
         if (gPreemptCall) thread_call_enter(gPreemptCall);
     }
+    if (native_adreno_gpu_interrupt) native_adreno_gpu_interrupt(status);
     thread_wakeup(event_t(&gIrqCount));
 }
 bool cpFence(const uint32_t *words, size_t count) {

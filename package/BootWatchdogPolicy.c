@@ -36,7 +36,8 @@ static const char lite_jobs[]=
  // Advice and statistics services with nothing to advise on here (untagged-3f2bd680: PerfPowerServices alone held 1.8 of 7 CPUs while it
  // wrote its power database, BackgroundShortcutRunner 0.3 to 0.5 all boot, duetexpertd 0.17 in Safari). Temporarily disabled to measure.
  "com.apple.PerfPowerServices,com.apple.PerfPowerServicesExtended,com.apple.perfpowermetricd,com.apple.siriinferenced,"
- "com.apple.siriknowledged,com.apple.siriactionsd,com.apple.duetexpertd,com.apple.modelcatalogd";
+ "com.apple.siriknowledged,com.apple.siriactionsd,com.apple.duetexpertd,com.apple.modelcatalogd,"
+ "com.apple.aonsensed,com.apple.filesystems.fskitd,com.apple.sosd,com.apple.spaceattributiond";
 // The board's always-on switches (pexpert/gen/bootargs.c reads them after the command line, which wins), so the boot loader's line,
 // at most 1000 bytes, carries only what changes between images: the staged system apps' view over /Applications (their icons), the
 // data-protection class kept on the unencrypted Data volume (PosterBoard's wallpaper store), and the camera daemon off (no camera:
@@ -44,7 +45,7 @@ static const char lite_jobs[]=
 // of panicking, as a shipping (release) kernel has none: an interrupts-off window of 786 us in a work queue thread's priority change
 // panicked the board (untagged-203fd45bf).
 char PE_builtin_boot_args[]="owner-staged-apps=1 owner-dataprotect=1 sheng-disable-jobs=com.apple.cameracaptured sched_preemption_disable_debug_mode=1 interrupt-masked-debug-mode=1 sheng-disable-watchdogd=1 sheng-lite=1";
-static char policy[2048],jobs[200];
+static char policy[3072],jobs[200];
 volatile int sheng_watchdog_policy_status=-1;
 
 // sheng-setup=1 or data-reset=2 (the install entry's "show Hello" choice): remove Setup's completion flags once, so this boot shows the Hello page.
