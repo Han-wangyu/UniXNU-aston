@@ -75,3 +75,12 @@ python scripts/check-aston-cpu-storage.py --xnu /path/to/patched/xnu --ramblock 
 
 The RamBlock checkout must be `4be2d7eb05ef5a98126c91e0302c149140c0e3e1`. Windows can use `--cc /path/to/zig.exe cc`.
 The fixtures exercise policy and publication decisions with API stand-ins. They do not build XNU or execute APFS.
+
+## Host Staging, Safety & Diagnostics
+
+- `scripts/aston-payload-menu.py`: Python 3.9+ `unixnu.toml` menu rewriter with built-in TOML fallback parser, `--drop-variants`, and `slot-b` / `recovery` / `fastboot` / `shutdown` firmware actions (`slot-b` stays default).
+- `scripts/flash-unixnu-staged.py`: streams `OS`, `SystemOS`, `OS.vroot`, `SystemOS.vroot`, `Payload`, and `Wifi` straight onto `sda15` (`unixnu`); `--init-store-and-log` zeroes the `SHNGDATA` head (`4456335` + `512` blocks) plus `SHLOG001`/export headers (`8380416`, `8314880`) before committing `SHNGROOT` at block 0.
+- `scripts/check-aston-staged-bundle.py`: offline host preflight checking LUN0 GPT (`unixnu` bounds + CRCs), `SHNGROOT` v2 digests/headroom, `unixnu.toml` `args <= 1016` B, `data.dbr` geometry, and `boot_a` `ANDROID!`/`AVBf` headers.
+- `scripts/aston-one-shot-install.py`: fail-closed TWRP deployment orchestrator enforcing immutable `boot_b` SHA-256 verification before and after flashing (`--check-only` runs offline host checks without USB).
+- `scripts/pull-aston-log.py`: read-only fetcher for `SHNGROOT` (block `0`), non-destructive `AstonProbe` UEFI reports (block `4194304`), and `SHLOG001` boot logs/exports (`8380416` / `8314880`).
+- `uefi/AstonPkg`: `AstonConnectAllControllers()` + `BlockIo` protocol notify in `AstonConfigDxe` to eliminate `PcdPlatformBootTimeOut=0` UFS race conditions, and non-destructive probe output at relative LBA `4194304`.
