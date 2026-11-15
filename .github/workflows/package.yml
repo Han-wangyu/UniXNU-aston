@@ -203,6 +203,10 @@ jobs:
       - name: host checks
         run: |
           python3 UniXNU-aston/scripts/check-aston-gauge-host.py
+          python3 UniXNU-aston/scripts/check-boot-watchdog-policy.py
+          python3 UniXNU-aston/scripts/check-gpu-power-host.py
+          python3 UniXNU-aston/scripts/check-aston-display-window.py
+          PYTHONPATH=UniXNU/scripts python3 UniXNU/scripts/test-runtime-inputs.py
       - name: kernel and payload
         working-directory: UniXNU
         env:
@@ -238,7 +242,8 @@ jobs:
         run: |
           python3 UniXNU-aston/scripts/aston-payload-menu.py "$WORK/payload/payload.img" \
             --variant "xnu-402x874|iOS 402x874 (native window)|aston-display=1" \
-            --variant "xnu-diag|iOS diag (logs)|log-sys=1 log-power=1 log-audio=1 log-wifi=1"
+            --variant "xnu-split-hid|iOS (isolated key/touch HID)|sheng-touch-split=1" \
+            --variant "xnu-diag|iOS diag (full GPU/CPU/UI logs)|log-gpu=1 log-display=1 log-power=1 log-sys=1 log-audio=1 log-wifi=1 boot-ui-trace=1 cs-profile=1"
       - uses: actions/cache/save@v4
         if: always() && steps.data-cache.outputs.cache-hit != 'true' && hashFiles('UniXNU/out/aston/ios-27.0.1-24A446/aston_ios27/runtime/data.dbr') != ''
         with:
