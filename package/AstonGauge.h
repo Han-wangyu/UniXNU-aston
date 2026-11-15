@@ -61,6 +61,7 @@ typedef struct {
     int32_t time_to_empty_min, time_to_full_min;      /* -1: the gauge has no estimate */
     uint32_t status;
     uint32_t charge_passes;         /* consecutive passes with the current above AGAUGE_CHARGE_MA */
+    int usb_online;                 /* host-enumerated active USB connection reported by QcomDwc3 */
     int last_error;                 /* the last bus error (0 none) */
     uint32_t passes, reads, retries, failures;
 } AgReading;

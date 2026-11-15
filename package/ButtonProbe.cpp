@@ -130,7 +130,7 @@ void buttonsIrq(void *) {
 // gpio-keys entry on PM8550 GPIO 6 reports KEY_VOLUMEDOWN (kalama-mtp.dtsi, oneplus/sm8550_v_15.0.0_ace_3), as on the OnePlus 13T.
 // sheng-buttons-swap=0 restores the reference board's assignment.
 unsigned gVolumeSwap = 1;
-unsigned gHoldMs = 150;
+unsigned gHoldMs = 35;
 uint32_t pressed() {
     uint8_t pon = 0, gpio = 0xff;
     uint32_t mask = 0;

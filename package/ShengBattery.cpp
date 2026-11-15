@@ -35,6 +35,7 @@ extern "C" {
 }
 
 extern "C" void qcom_dwc3_vbus(int) __attribute__((weak_import));
+extern "C" int qcom_dwc3_usb_host_online(void) __attribute__((weak_import));
 // The USB-C owner (32779) shares this channel: QcomDwc3 asks what is on the cable over UCSI.
 extern "C" uint32_t qcom_ucsi_start(uint8_t *) __attribute__((weak_import));
 extern "C" uint32_t qcom_ucsi_receive(const uint8_t *, uint32_t, uint8_t *) __attribute__((weak_import));
@@ -66,7 +67,8 @@ extern "C" {volatile int32_t native_gauge_stats[16];}
 
 namespace {
 constexpr uint32_t kRequestMs = 2000, kRefreshMs = 60000, kSlowEvery = 10, kRing = 16, kMessage = 560;
-constexpr uint32_t kGaugeMs = 10000, kGaugeFirstMs = 2000, kGaugeRetryMs = 30000, kGaugeBringups = 5;
+constexpr uint32_t kGaugeMs = 10000, kGaugeWatchMs = 2000, kGaugeSubticksPerRead = kGaugeMs / kGaugeWatchMs, kGaugeRetryMs = 30000,
+    kGaugeBringups = 5;
 
 struct GaugeWindow {uint64_t phys; uint32_t size;};
 // In AgbWin* order.
@@ -101,7 +103,7 @@ class ShengBattery : public IOPMPowerSource {
     IOTimerEventSource *gaugeTimer = nullptr;
     AgbBus gaugeBus;
     AgReading gauge;
-    uint32_t gaugeBringups = 0, gaugePasses = 0;
+    uint32_t gaugeBringups = 0, gaugePasses = 0, gaugeSubticks = kGaugeSubticksPerRead;
 
     static uint32_t gaugeRead32(void *ctx, unsigned window, uint32_t offset) {
         ShengBattery *self = static_cast<ShengBattery *>(ctx);
@@ -347,14 +349,20 @@ class ShengBattery : public IOPMPowerSource {
             if (rc) {sender->setTimeoutMS(kGaugeRetryMs); return;}
             native_battery_stats[0] = 3;
         }
-        const AgBus bus = {self, &ShengBattery::gaugeRead16, &ShengBattery::gaugeSleepMs};
-        const int result = aston_gauge_read(&bus, &self->gauge, self->gaugePasses++ % kSlowEvery == 0);
-        self->gaugeCounters(result);
-        ShengBatterySnapshot s;
-        aston_gauge_snapshot(&self->gauge, &s);
-        self->publishSnapshot(s, false);
-        if (s.charge_known && aston_soc_backup_note) aston_soc_backup_note(s.percent);
-        sender->setTimeoutMS(self->published ? kGaugeMs : kGaugeFirstMs);
+        const int usbOnline = qcom_dwc3_usb_host_online ? qcom_dwc3_usb_host_online() : 0;
+        const bool usbFlipped = usbOnline != self->gauge.usb_online;
+        self->gauge.usb_online = usbOnline;
+        if (!self->published || usbFlipped || ++self->gaugeSubticks >= kGaugeSubticksPerRead) {
+            self->gaugeSubticks = 0;
+            const AgBus bus = {self, &ShengBattery::gaugeRead16, &ShengBattery::gaugeSleepMs};
+            const int result = aston_gauge_read(&bus, &self->gauge, self->gaugePasses++ % kSlowEvery == 0);
+            self->gaugeCounters(result);
+            ShengBatterySnapshot s;
+            aston_gauge_snapshot(&self->gauge, &s);
+            self->publishSnapshot(s, false);
+            if (s.charge_known && aston_soc_backup_note) aston_soc_backup_note(s.percent);
+        }
+        sender->setTimeoutMS(kGaugeWatchMs);
     }
 
 public:

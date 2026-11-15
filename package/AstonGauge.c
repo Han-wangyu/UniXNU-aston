@@ -145,12 +145,14 @@ void aston_gauge_snapshot(const AgReading *r, ShengBatterySnapshot *s)
     s->percent = percent;
     s->voltage_mv = cell_mv;
     s->current_ma = amps ? r->current_ma * AGAUGE_CELLS : 0;
-    /* Without the DSP's charger state, charging is a pack current into the battery seen twice in a row; a full battery the gauge holds
-     * in charge mode with no current flowing out counts as on its charger. */
-    s->charging = amps && r->charge_passes >= 2;
+    /* Without the DSP's charger state, charging is a pack current into the battery seen twice in a row, or an active USB host
+     * connection while not yet full; a full battery held in charge mode or on USB stays external without claiming to charge. */
+    const int gauge_charging = amps && r->charge_passes >= 2;
     s->fully_charged = aston_gauge_has(r, AgStatus) && (r->status & AGAUGE_STATUS_FC) && percent >= 99;
-    s->external = s->charging ||
-                  (s->fully_charged && amps && r->current_ma >= 0 && !(r->status & AGAUGE_STATUS_DSG));
+    const int gauge_full_on_charger = s->fully_charged && amps && r->current_ma >= 0 && !(r->status & AGAUGE_STATUS_DSG);
+    const int on_usb = s->present && r->usb_online != 0;
+    s->external = on_usb || gauge_charging || gauge_full_on_charger;
+    s->charging = s->external && !s->fully_charged && (on_usb || gauge_charging);
     s->critical = s->present && !s->external && s->charge_known && percent <= 2 && (!volts || cell_mv < 3500);
     s->temperature_valid = aston_gauge_has(r, AgTemperature);
     s->temperature = s->temperature_valid ? r->temperature_centi : 0;
@@ -162,6 +164,15 @@ void aston_gauge_snapshot(const AgReading *r, ShengBatterySnapshot *s)
     if (aston_gauge_has(r, AgTimeToFull)) s->time_to_full_min = r->time_to_full_min;
     /* the adapter is not known without the DSP: the USB family's "unknown" code while on a charger */
     s->adapter_family = s->external ? 0xe0004007u : 0;
+    if (on_usb && !gauge_charging) {
+        s->adapter_mv = 5000;
+        s->adapter_ma = 500;
+        s->adapter_watts = 2;
+    } else if (s->external) {
+        s->adapter_mv = 5000;
+        s->adapter_ma = 1500;
+        s->adapter_watts = 7;
+    }
 }
 
 int aston_gauge_transfer_allowed(const uint8_t *tx, unsigned txn, unsigned rxn)

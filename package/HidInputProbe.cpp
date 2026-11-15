@@ -109,42 +109,62 @@ static void appendProperty(IORegistryEntry *driver,const char *key,const char *l
     } else if(used<sizeof(native_hid_input_props)-6) {memcpy(native_hid_input_props+used,"none ",5);used+=5;}
     native_hid_input_props[used]=0;
 }
-static bool hasDigitizerPair(IORegistryEntry *driver) {
+static bool hasUsagePair(IORegistryEntry *driver,uint32_t expectedPage,uint32_t expectedUsage) {
     OSObject *pageObj=driver->copyProperty("PrimaryUsagePage");
     OSObject *usageObj=driver->copyProperty("PrimaryUsage");
     OSNumber *page=OSDynamicCast(OSNumber,pageObj);
     OSNumber *usage=OSDynamicCast(OSNumber,usageObj);
-    const bool ok=page && usage && page->unsigned32BitValue()==0x0d && usage->unsigned32BitValue()==4;
+    const bool ok=page && usage && page->unsigned32BitValue()==expectedPage && usage->unsigned32BitValue()==expectedUsage;
     OSSafeReleaseNULL(pageObj);
     OSSafeReleaseNULL(usageObj);
     return ok;
 }
-static void publishDigitizer(IORegistryEntry *driver) {
-    driver->setProperty("Built-In",kOSBooleanTrue);driver->setProperty("DisplayIntegrated",kOSBooleanTrue);
-    // backboardd (-[BKHIDDirectTouchEventProcessor processEvent:sender:dispatcher:], decoded from the target) drops a
-    // digitizer event unless the sending service has PrimaryUsagePage 0x0D and PrimaryUsage 1, 4 or 0x20
-    // ("ignoring digitizer event ... from unsupported service"). The combined device lists its keyboard collection
-    // first, so the services would publish (1,6); publish Digitizer/Touch Screen on the services after they have
-    // matched (setting it on the device would change driver matching, which is observed to depend on the layout).
-    driver->setProperty("PrimaryUsagePage",(unsigned long long)0x0d,32);driver->setProperty("PrimaryUsage",(unsigned long long)4,32);
-    // backboardd's digitizer filter is {DeviceUsagePage, DeviceUsage, Built-In}; make the flag visible on the
-    // interface (the event service's provider) as well, not only on the device two levels down.
+__attribute__((unused)) static bool hasDigitizerPair(IORegistryEntry *driver) {
+    return hasUsagePair(driver,0x0du,4u);
+}
+static bool hasPublishedProps(IORegistryEntry *driver,uint32_t expectedPage,uint32_t expectedUsage) {
+    OSObject *builtInObj=driver->copyProperty("Built-In");
+    const bool builtIn=(builtInObj==kOSBooleanTrue);
+    OSSafeReleaseNULL(builtInObj);
+    return builtIn && hasUsagePair(driver,expectedPage,expectedUsage);
+}
+static bool isDigitizerDevice(IORegistryEntry *device) {
+    return device && device->getProperty("DigitizerCollectionDispatch")!=nullptr;
+}
+static bool isButtonsDevice(IORegistryEntry *device) {
+    return device && device->getProperty("ConsumerButtonsOnly")!=nullptr && !isDigitizerDevice(device);
+}
+static void publishServiceProps(IORegistryEntry *driver,uint32_t page,uint32_t usage,bool displayIntegrated) {
+    driver->setProperty("Built-In",kOSBooleanTrue);
+    if(displayIntegrated)driver->setProperty("DisplayIntegrated",kOSBooleanTrue);
+    // backboardd (-[BKHIDDirectTouchEventProcessor processEvent:sender:dispatcher:]) drops a digitizer event unless the sending
+    // service has PrimaryUsagePage 0x0D and PrimaryUsage 1, 4 or 0x20, while ButtonResolver matches {PrimaryUsagePage: 12,
+    // PrimaryUsage: 1, Built-In: true}. Publishing on both the event service and its IOHIDInterface parent closes the DriverKit
+    // startup overwrite window before backboardd inspects the service.
+    driver->setProperty("PrimaryUsagePage",(unsigned long long)page,32);
+    driver->setProperty("PrimaryUsage",(unsigned long long)usage,32);
     if(IORegistryEntry *interface=driver->getParentEntry(gIOServicePlane)) {
-        interface->setProperty("Built-In",kOSBooleanTrue);interface->setProperty("DisplayIntegrated",kOSBooleanTrue);
-        interface->setProperty("PrimaryUsagePage",(unsigned long long)0x0d,32);interface->setProperty("PrimaryUsage",(unsigned long long)4,32);
+        interface->setProperty("Built-In",kOSBooleanTrue);
+        if(displayIntegrated)interface->setProperty("DisplayIntegrated",kOSBooleanTrue);
+        interface->setProperty("PrimaryUsagePage",(unsigned long long)page,32);
+        interface->setProperty("PrimaryUsage",(unsigned long long)usage,32);
     }
 }
-// backboardd caches the pair when it first sees the service, about 110 ms after the DriverKit driver writes (1,6) and registers it. When
-// backboardd is already matching at that moment, the once-per-second check is too late and every touch is dropped for the whole boot. This
-// thread closes that window: it checks every 2 ms until the service has been registered for 10 s, at most 180 s.
-static void digitizerPairGuard(void *context,wait_result_t) {
+// backboardd caches the pair when it first sees the service, about 110 ms after the DriverKit driver registers it. This
+// thread checks every 2 ms until the service has been registered for 10 s, at most 180 s.
+static void servicePairGuard(void *context,wait_result_t) {
     IORegistryEntry *device=static_cast<IORegistryEntry *>(context);
+    const bool isDigitizer=isDigitizerDevice(device);
+    const bool isButtons=isButtonsDevice(device);
+    if(!isDigitizer && !isButtons)return;
+    const uint32_t page=isDigitizer?0x0du:0x0cu;
+    const uint32_t usage=isDigitizer?4u:1u;
     unsigned stopAt=180000;
     for(unsigned ms=0;ms<stopAt;ms+=2) {
         if(IORegistryEntry *driver=findEventDriver(device,4)) {
-            if(device->getProperty("Built-In") && !hasDigitizerPair(driver)) {
-                publishDigitizer(driver);
-                IOLog("[hid] digitizer usage pair published at +%u ms\n",ms);
+            if(!hasPublishedProps(driver,page,usage)) {
+                publishServiceProps(driver,page,usage,isDigitizer);
+                IOLog("[hid] %s usage pair (0x%x,%u) published at +%u ms\n",isDigitizer?"digitizer":"buttons",page,usage,ms);
             }
             IOService *service=OSDynamicCast(IOService,driver);
             if(stopAt==180000 && service && (service->getState()&kIOServiceRegisteredState) && ms+10000<stopAt)stopAt=ms+10000;
@@ -156,16 +176,20 @@ __attribute__((noinline)) void native_hid_live_checkpoint(IOService *device) {
     size_t used=0;native_hid_input_registry[0]=0;describeInput(device,0,used);
     if(IORegistryEntry *driver=findEventDriver(device,4)) {
         size_t props=0;native_hid_input_props[0]=0;
-        // backboardd's digitizer service classification reads Built-In/DisplayIntegrated from the event service it
-        // opened, not from the HID device below it; publish them on the service itself (idempotent, once per second).
-        // Set once only: every setProperty on a service with attached user clients is a registry property-change
-        // notification, and repeating it each second keeps backboardd/hidd busy re-evaluating the service.
-        // iPadOS 27: the event service is the kernel side of a DriverKit driver, which publishes its own usage pair (1,6) after it
-        // starts, later than the first check here; a pair read back as anything but (0x0d,4) is therefore published again.
-        static IORegistryEntry *publishedFor;
-        if(device->getProperty("Built-In") && (publishedFor!=driver || !hasDigitizerPair(driver))) {
-            publishedFor=driver;
-            publishDigitizer(driver);
+        // Set once per device only: repeating setProperty each second keeps backboardd/hidd busy re-evaluating the service.
+        // Keep separate static pointers for digitizer vs consumer buttons so two active NativeHidInput instances never ping-pong.
+        if(isDigitizerDevice(device)) {
+            static IORegistryEntry *publishedDigitizerFor;
+            if(publishedDigitizerFor!=driver || !hasPublishedProps(driver,0x0d,4)) {
+                publishedDigitizerFor=driver;
+                publishServiceProps(driver,0x0d,4,true);
+            }
+        } else if(isButtonsDevice(device)) {
+            static IORegistryEntry *publishedButtonsFor;
+            if(publishedButtonsFor!=driver || !hasPublishedProps(driver,0x0c,1)) {
+                publishedButtonsFor=driver;
+                publishServiceProps(driver,0x0c,1,false);
+            }
         }
         // The Digitizer/DebugState dumps (appendProperty) are not read on hardware runs without a photograph and walk
         // driver-internal state from a foreign thread; only the cheap Built-In readback stays.
@@ -229,9 +253,9 @@ void native_hid_input_probe(void) {
                     }
                     unsigned split=0;
                     PE_parse_boot_argn("sheng-touch-split",&split,sizeof(split));
-                    if(started && split!=1) {
+                    if(started && (isDigitizerDevice(device) || isButtonsDevice(device))) {
                         thread_t guard=nullptr;
-                        if(kernel_thread_start(digitizerPairGuard,device,&guard)==KERN_SUCCESS)thread_deallocate(guard);
+                        if(kernel_thread_start(servicePairGuard,device,&guard)==KERN_SUCCESS)thread_deallocate(guard);
                     }
                     unsigned touchHid=0;
                     if(started && split==1 && PE_parse_boot_argn("sheng-touch-hid",&touchHid,sizeof(touchHid)) && touchHid==1) {
@@ -240,7 +264,7 @@ void native_hid_input_probe(void) {
                         bool touchStarted=touch && touch->metaCast("IOHIDDevice") && touch->init() && touch->attach(resource) && touch->start(resource);
                         if(touchStarted) {
                             thread_t guard=nullptr;
-                            if(kernel_thread_start(digitizerPairGuard,touch,&guard)==KERN_SUCCESS)thread_deallocate(guard);
+                            if(kernel_thread_start(servicePairGuard,touch,&guard)==KERN_SUCCESS)thread_deallocate(guard);
                         }
                         if(!touchStarted && touch){touch->detach(resource);OSSafeReleaseNULL(touch);}
                     }

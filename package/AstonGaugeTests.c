@@ -178,6 +178,30 @@ static void test_gauge(void)
     aston_gauge_snapshot(&r, &s);
     CHECK(s.fully_charged && s.external && !s.charging);
 
+    /* PC/Mac USB SDP connection with screen-on load: net battery current slightly negative, still ExternalConnected & IsCharging */
+    pack(&g, 8322, -9, 78, AGAUGE_STATUS_DSG);
+    memset(&r, 0, sizeof r);
+    r.usb_online = 1;
+    aston_gauge_read(&bus, &r, 0);
+    aston_gauge_snapshot(&r, &s);
+    CHECK(s.present && s.current_ma == -18 && s.external && s.charging && !s.fully_charged);
+    CHECK(s.adapter_family == 0xe0004007u && s.adapter_mv == 5000 && s.adapter_ma == 500 && s.adapter_watts == 2);
+
+    /* unplugging USB with negative current immediately drops external/charging */
+    pack(&g, 8322, -300, 78, AGAUGE_STATUS_DSG);
+    r.usb_online = 0;
+    aston_gauge_read(&bus, &r, 0);
+    aston_gauge_snapshot(&r, &s);
+    CHECK(!s.external && !s.charging && s.adapter_family == 0);
+
+    /* full battery (100 %, FC) on USB reports ExternalConnected + FullyCharged without IsCharging */
+    pack(&g, 8800, 0, 100, AGAUGE_STATUS_FC | AGAUGE_STATUS_DSG);
+    memset(&r, 0, sizeof r);
+    r.usb_online = 1;
+    aston_gauge_read(&bus, &r, 0);
+    aston_gauge_snapshot(&r, &s);
+    CHECK(s.external && s.fully_charged && !s.charging && s.adapter_family == 0xe0004007u);
+
     /* 0 % with charge left in the cells shows 1 %; low and draining is critical */
     pack(&g, 6950, -300, 0, AGAUGE_STATUS_DSG);   /* 3475 mV a cell */
     memset(&r, 0, sizeof r);

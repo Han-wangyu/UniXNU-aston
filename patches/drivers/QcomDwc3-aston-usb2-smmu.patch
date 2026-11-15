@@ -1,5 +1,5 @@
 diff --git a/QcomDwc3.cpp b/QcomDwc3.cpp
-index 806fbe3..71a6c82 100644
+index 806fbe3..eb3496e 100644
 --- a/QcomDwc3.cpp
 +++ b/QcomDwc3.cpp
 @@ -334,6 +334,8 @@ bool qmpInit(bool reverse) {
@@ -34,3 +34,19 @@ index 806fbe3..71a6c82 100644
      Region tlmm = {};
      if (!mapRegion(tlmm, 0xf100000, 0x10000)) return;
      const uint32_t reverse = tlmm.va[(11 * 0x1000 + 4) / 4] & 1u;
+@@ -786,6 +794,15 @@ extern "C" void qcom_dwc3_vbus(int online) {
+     cableChanged();
+ }
+ extern "C" void qcom_dwc3_host_load(int result) {native_usb_stats[46] = (uint32_t)result << 16;}
++extern "C" int qcom_dwc3_usb_host_online(void) {
++    if (!gController || !gGlobals.va || gCoreRole != kRoleDevice || native_usb_stats[0] < 12) return 0;
++    const uint32_t dcfg = gGlobals.va[0x700 / 4];
++    const uint32_t dsts = gGlobals.va[0x70c / 4];
++    const uint32_t devAddr = (dcfg >> 3) & 0x7fu;
++    const uint32_t link = (dsts >> 18) & 0xfu;
++    const bool halted = (dsts & (1u << 22)) != 0;
++    return (devAddr != 0 && !halted && link <= 2u) ? 1 : 0;
++}
+ // The USB-C owner on the PMIC channel; the board's battery service owns the channel and its work loop, and calls these there.
+ extern "C" uint32_t qcom_ucsi_start(uint8_t *out) {return ucsi_start(&gUcsi, out);}
+ static void ucsiStats() {

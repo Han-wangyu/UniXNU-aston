@@ -687,11 +687,11 @@ static void raisePonIrq() {
 
 wait_result_t thread_block(thread_continue_t) {
     // Timeline inside buttonsThread():
-    //   step 0: initially idle -> t=20000ms assert power (30 ms short tap begins)
-    //   step 1: advance +30 ms -> release power hardware
-    //   step 2: buttonsThread computes remainingUs == 120000 -> advance by remainingUs -> expires at 150 ms
+    //   step 0: initially idle -> t=20000ms assert power (20 ms short tap begins)
+    //   step 1: advance +20 ms -> release power hardware
+    //   step 2: buttonsThread computes remainingUs == 15000 -> advance by remainingUs -> expires at 35 ms
     //   step 3: at t=20200ms assert power (800 ms long hold begins)
-    //   step 4: at t=21000ms release power hardware (already held >= 150 ms)
+    //   step 4: at t=21000ms release power hardware (already held >= 35 ms)
     //   step 5: at t=21200ms assert volume-up (30 ms tap begins) -> assert NO timeout wait on release
     //   step 6: at t=21230ms release volume-up hardware -> must release immediately!
     //   step 7: terminate scripted loop cleanly via C++ exception.
@@ -704,13 +704,13 @@ wait_result_t thread_block(thread_continue_t) {
         break;
     case 1:
         assert(!gLastWaitTimed);
-        gNowNs = 20'030'000'000ull;
+        gNowNs = 20'020'000'000ull;
         setPonGpioRt(false, false, false);
         raisePonIrq();
         break;
     case 2:
         assert(gLastWaitTimed);
-        assert(gLastWaitTimeoutUs >= 119000 && gLastWaitTimeoutUs <= 121000);
+        assert(gLastWaitTimeoutUs >= 14000 && gLastWaitTimeoutUs <= 16000);
         gNowNs += (uint64_t)gLastWaitTimeoutUs * 1000ull;
         break;
     case 3:
@@ -943,9 +943,9 @@ static void runButtonsTests() {
     assert(native_buttons_stats[0] == 3);
     assert(gButtonReports.size() == 6);
 
-    // 30 ms short Power tap -> held to 150 ms
+    // 20 ms short Power tap -> held to 35 ms
     assert(gButtonReports[0].timeMs == 20000 && gButtonReports[0].mask == (1u << 1));
-    assert(gButtonReports[1].timeMs == 20150 && gButtonReports[1].mask == 0);
+    assert(gButtonReports[1].timeMs == 20035 && gButtonReports[1].mask == 0);
     // 800 ms long Power hold -> releases immediately at 800 ms (no extra hold)
     assert(gButtonReports[2].timeMs == 20200 && gButtonReports[2].mask == (1u << 1));
     assert(gButtonReports[3].timeMs == 21000 && gButtonReports[3].mask == 0);
@@ -953,7 +953,7 @@ static void runButtonsTests() {
     assert(gButtonReports[4].timeMs == 21200 && gButtonReports[4].mask == (1u << 2));
     assert(gButtonReports[5].timeMs == 21230 && gButtonReports[5].mask == 0);
 
-    puts("PASS [2/4]: ButtonProbe 150ms kReportPower-only hold, immediate Volume, and armPeripheral 4x retry");
+    puts("PASS [2/4]: ButtonProbe 35ms kReportPower-only hold, immediate Volume, and armPeripheral 4x retry");
 }
 
 int main() {
@@ -1056,8 +1056,27 @@ int main() {
     int refsBefore = pBefore->hostRefCount();
     assert(hasDigitizerPair(driver));
     assert(pBefore->hostRefCount() == refsBefore);
+    assert(!hasPublishedProps(driver, 0x0d, 4));
+    driver->setProperty("Built-In", kOSBooleanTrue);
+    assert(hasPublishedProps(driver, 0x0d, 4));
     driver->setProperty("PrimaryUsagePage", 1ULL, 32);
     assert(!hasDigitizerPair(driver));
+
+    driver->setProperty("PrimaryUsagePage", 0x0cULL, 32);
+    driver->setProperty("PrimaryUsage", 1ULL, 32);
+    auto *pBtn = static_cast<OSNumber *>(driver->getProperty("PrimaryUsagePage"));
+    int btnRefs = pBtn->hostRefCount();
+    assert(hasPublishedProps(driver, 0x0c, 1));
+    assert(pBtn->hostRefCount() == btnRefs);
+
+    auto *dev = new IORegistryEntry();
+    dev->setProperty("ConsumerButtonsOnly", kOSBooleanTrue);
+    assert(isButtonsDevice(dev));
+    assert(!isDigitizerDevice(dev));
+    dev->setProperty("DigitizerCollectionDispatch", kOSBooleanTrue);
+    assert(isDigitizerDevice(dev));
+    assert(!isButtonsDevice(dev));
+    dev->release();
     driver->release();
 
     puts("PASS [3/4]: AstonPanel aston-panel-off=1 opt-in & HidInputProbe copyProperty refcount safety");
