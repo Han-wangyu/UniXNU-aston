@@ -6,7 +6,7 @@
 
   When PcdAstonProbeMode != 0, writes ASTON_UEFI_PROBE_V1 hardware
   telemetry (GOP, high memory, UniXNULoader, BootLU, unixnu LBA geometry) to
-  LBA 0 of "unixnu" on ReadyToBoot and reboots cleanly back to fastboot.
+  ASTON_PROBE_REPORT_REL_LBA (16 GiB) of "unixnu" on ReadyToBoot and reboots cleanly back to fastboot.
 
   SPDX-License-Identifier: BSD-2-Clause-Patent
 **/
@@ -93,6 +93,7 @@ STATIC ASTON_RAM_BLOCK_DEV  *mRamDisk         = NULL;
 STATIC EFI_HANDLE           mRamHandle        = NULL;
 STATIC BOOLEAN              mPublished        = FALSE;
 STATIC VOID                 *mBlockIoNotifyReg = NULL;
+STATIC EFI_EVENT            mBlockIoEvent     = NULL;
 
 STATIC
 EFI_STATUS
@@ -650,16 +651,18 @@ TryPublishUnixnuPayload (
   mRamDisk->BlockIo.WriteBlocks        = RamBlockWrite;
   mRamDisk->BlockIo.FlushBlocks        = RamBlockFlush;
 
-  RamHandle = NULL;
-  Status    = gBS->InstallMultipleProtocolInterfaces (
-                     &RamHandle,
-                     &gEfiDevicePathProtocolGuid,
-                     &mPayloadDevicePath,
-                     &gEfiBlockIoProtocolGuid,
-                     &mRamDisk->BlockIo,
-                     NULL
-                     );
+  mPublished = TRUE;
+  RamHandle  = NULL;
+  Status     = gBS->InstallMultipleProtocolInterfaces (
+                      &RamHandle,
+                      &gEfiDevicePathProtocolGuid,
+                      &mPayloadDevicePath,
+                      &gEfiBlockIoProtocolGuid,
+                      &mRamDisk->BlockIo,
+                      NULL
+                      );
   if (EFI_ERROR (Status)) {
+    mPublished = FALSE;
     FreePool (mRamDisk);
     mRamDisk = NULL;
     FreePages (Buffer, EFI_SIZE_TO_PAGES (AllocBytes));
@@ -667,8 +670,12 @@ TryPublishUnixnuPayload (
   }
 
   mRamHandle = RamHandle;
+  if (mBlockIoEvent != NULL) {
+    gBS->CloseEvent (mBlockIoEvent);
+    mBlockIoEvent = NULL;
+  }
+
   gBS->ConnectController (RamHandle, NULL, NULL, TRUE);
-  mPublished = TRUE;
   DEBUG ((DEBUG_INFO, "AstonConfigDxe: published SHNGROOT Payload (%lu bytes)\n", PayloadSize));
   return EFI_SUCCESS;
 }
@@ -854,6 +861,11 @@ OnReadyToBoot (
   )
 {
   gBS->CloseEvent (Event);
+  if (mBlockIoEvent != NULL) {
+    gBS->CloseEvent (mBlockIoEvent);
+    mBlockIoEvent = NULL;
+  }
+
   AstonConnectAllControllers ();
 
   if (FixedPcdGet8 (PcdAstonProbeMode) != 0) {
@@ -877,7 +889,6 @@ AstonConfigDxeEntry (
   )
 {
   EFI_EVENT   ReadyEvent;
-  EFI_EVENT   BlockIoEvent;
   EFI_STATUS  Status;
 
   if (FixedPcdGet8 (PcdAstonProbeMode) == 0) {
@@ -888,14 +899,18 @@ AstonConfigDxeEntry (
                       TPL_CALLBACK,
                       OnBlockIoInstalled,
                       NULL,
-                      &BlockIoEvent
+                      &mBlockIoEvent
                       );
       if (!EFI_ERROR (Status)) {
-        gBS->RegisterProtocolNotify (
-               &gEfiBlockIoProtocolGuid,
-               BlockIoEvent,
-               &mBlockIoNotifyReg
-               );
+        Status = gBS->RegisterProtocolNotify (
+                        &gEfiBlockIoProtocolGuid,
+                        mBlockIoEvent,
+                        &mBlockIoNotifyReg
+                        );
+        if (EFI_ERROR (Status)) {
+          gBS->CloseEvent (mBlockIoEvent);
+          mBlockIoEvent = NULL;
+        }
       }
     }
   }
